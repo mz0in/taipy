@@ -38,9 +38,9 @@ replaced_content = ""
 with open(gui_pyi_file, "r") as file:
     for line in file:
         if "def run(" in line:
-            line = line.replace(
-                ", run_server: bool = ..., run_in_thread: bool = ..., async_mode: str = ..., **kwargs", gui_config
-            )
+            replace_str = line[line.index(", run_server") : (line.index("**kwargs") + len("**kwargs"))]
+            # ", run_server: bool = ..., run_in_thread: bool = ..., async_mode: str = ..., **kwargs"
+            line = line.replace(replace_str, gui_config)
         replaced_content = replaced_content + line
 
 with open(gui_pyi_file, "w") as write_file:
@@ -53,15 +53,15 @@ builder_py_file = "./taipy/gui/builder/__init__.py"
 builder_pyi_file = builder_py_file + "i"
 with open("./taipy/gui/viselements.json", "r") as file:
     viselements = json.load(file)
-with open("./tools/builder/block.txt", "r") as file:
+with open("./tools/gui/builder/block.txt", "r") as file:
     block_template = file.read()
-with open("./tools/builder/control.txt", "r") as file:
+with open("./tools/gui/builder/control.txt", "r") as file:
     control_template = file.read()
 
 os.system(f"pipenv run stubgen {builder_py_file} --no-import --parse-only --export-less -o ./")
 
 with open(builder_pyi_file, "a") as file:
-    file.write("from ._element import _Element, _Block\n")
+    file.write("from ._element import _Element, _Block, _Control\n")
 
 
 def get_properties(element, viselements) -> t.List[t.Dict[str, t.Any]]:
@@ -89,10 +89,14 @@ def build_doc(element: t.Dict[str, t.Any]):
 
 for control_element in viselements["controls"]:
     name = control_element[0]
-    property_list = []
-    property_names = []
+    property_list: t.List[t.Dict[str, t.Any]] = []
+    property_names: t.List[str] = []
     for property in get_properties(control_element[1], viselements):
         if property["name"] not in property_names and "[" not in property["name"]:
+            if "default_property" in property and property["default_property"] is True:
+                property_list.insert(0, property)
+                property_names.insert(0, property["name"])
+                continue
             property_list.append(property)
             property_names.append(property["name"])
     properties = ", ".join([f"{p} = ..." for p in property_names])

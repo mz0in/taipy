@@ -9,23 +9,18 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - uses: ricardochaves/python-lint@v1.4.0
+      - uses: jpetrucciani/mypy-check@master
         with:
-          use-black: false
-          use-flake8: false
-          use-isort: false
-          use-pycodestyle: false
-          use-pylint: false
-          extra-mypy-options: "--ignore-missing-imports --implicit-optional --no-namespace-packages --exclude (taipy/templates/|generate_pyi.py|tools) --follow-imports skip"
+          mypy_flags:  "--ignore-missing-imports --implicit-optional --no-namespace-packages --exclude (taipy/templates/|generate_pyi.py|tools) --follow-imports skip --disable-error-code import-untyped"
 
       - uses: chartboost/ruff-action@v1
   tests:
     needs: linter
-    timeout-minutes: 40
+    timeout-minutes: 50
     strategy:
       fail-fast: false
       matrix:
-        python-version: ['3.8', '3.9', '3.10', '3.11']
+        python-version: ['3.8', '3.9', '3.10', '3.11', '3.12']
         os: [ubuntu-latest, windows-latest, macos-latest]
     runs-on: ${{ matrix.os }}
     steps:
@@ -43,6 +38,7 @@ jobs:
               - 'taipy/core/**'
             gui:
               - 'taipy/gui/**'
+              - 'frontend/taipy-gui/**'
             gui-core:
               - 'taipy/gui_core/**'
             logger:
@@ -55,9 +51,11 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: ${{matrix.python-version}}
+      - name: Install Setuptools and wheel
+        run: pip install --upgrade setuptools wheel
 
       - name: Install pipenv
-        run: curl https://raw.githubusercontent.com/pypa/pipenv/master/get-pipenv.py | python
+        run: pip install --upgrade pipenv
 
       - name: Install Dependencies
         run: pipenv install --dev --python=${{ matrix.python-version }}
@@ -89,9 +87,11 @@ jobs:
         if: steps.changes.outputs.core == 'true'
         run: pipenv run pytest -m "not orchestrator_dispatcher and not standalone" tests/core
 
-      - name: Pytest GUI
+      - name: Run GUI Test Action
         if: steps.changes.outputs.gui == 'true'
-        run: pipenv run pytest tests/gui
+        uses: ./.github/actions/gui-test
+        with:
+          os: ${{ matrix.os }}
 
       - name: Pytest GUI Core
         if: steps.changes.outputs.gui-core == 'true'
@@ -111,11 +111,11 @@ jobs:
 
   submit_tests:
     needs: linter
-    timeout-minutes: 20
+    timeout-minutes: 40
     strategy:
       fail-fast: false
       matrix:
-        python-version: ['3.8', '3.9', '3.10', '3.11']
+        python-version: ['3.8', '3.9', '3.10', '3.11', '3.12']
         os: [ubuntu-latest, windows-latest, macos-latest]
     runs-on: ${{ matrix.os }}
     steps:
@@ -134,7 +134,7 @@ jobs:
 
       - name: Install pipenv
         if: steps.changes.outputs.core == 'true'
-        run: curl https://raw.githubusercontent.com/pypa/pipenv/master/get-pipenv.py | python
+        run: pip install --upgrade pipenv
 
       - name: Install Dependencies
         if: steps.changes.outputs.core == 'true'
@@ -150,11 +150,11 @@ jobs:
 
   standalone_tests:
     needs: linter
-    timeout-minutes: 20
+    timeout-minutes: 40
     strategy:
       fail-fast: false
       matrix:
-        python-version: ['3.8', '3.9', '3.10', '3.11']
+        python-version: ['3.8', '3.9', '3.10', '3.11', '3.12']
         os: [ubuntu-latest, windows-latest, macos-latest]
     runs-on: ${{ matrix.os }}
     steps:
@@ -173,7 +173,7 @@ jobs:
 
       - name: Install pipenv
         if: steps.changes.outputs.core == 'true'
-        run: curl https://raw.githubusercontent.com/pypa/pipenv/master/get-pipenv.py | python
+        run: pip install --upgrade pipenv
 
       - name: Install Dependencies
         if: steps.changes.outputs.core == 'true'

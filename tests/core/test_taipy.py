@@ -40,7 +40,6 @@ from taipy.core import (
 from taipy.core._orchestrator._orchestrator_factory import _OrchestratorFactory
 from taipy.core._version._version_manager import _VersionManager
 from taipy.core.config.data_node_config import DataNodeConfig
-from taipy.core.config.job_config import JobConfig
 from taipy.core.config.scenario_config import ScenarioConfig
 from taipy.core.cycle._cycle_manager import _CycleManager
 from taipy.core.data._data_manager import _DataManager
@@ -58,7 +57,7 @@ def cb(s, j):
 
 
 class TestTaipy:
-    def test_set(self, scenario, cycle, sequence, data_node, task):
+    def test_set(self, scenario, cycle, sequence, data_node, task, submission):
         with mock.patch("taipy.core.data._data_manager._DataManager._set") as mck:
             tp.set(data_node)
             mck.assert_called_once_with(data_node)
@@ -74,6 +73,9 @@ class TestTaipy:
         with mock.patch("taipy.core.cycle._cycle_manager._CycleManager._set") as mck:
             tp.set(cycle)
             mck.assert_called_once_with(cycle)
+        with mock.patch("taipy.core.submission._submission_manager._SubmissionManager._set") as mck:
+            tp.set(submission)
+            mck.assert_called_once_with(submission)
 
     def test_is_editable_is_called(self, cycle, job, data_node):
         with mock.patch("taipy.core.cycle._cycle_manager._CycleManager._is_editable") as mck:
@@ -349,7 +351,7 @@ class TestTaipy:
                 tp.submit(scenario)
 
         assert len(warning) == 1
-        assert warning[0].message.args[0] == "The Core service is NOT running"
+        assert "The Core service is NOT running" in warning[0].message.args[0]
 
     def test_get_tasks(self):
         with mock.patch("taipy.core.task._task_manager._TaskManager._get_all") as mck:
@@ -569,18 +571,28 @@ class TestTaipy:
             tp.get_latest_job(task)
             mck.assert_called_once_with(task)
 
-    def test_get_latest_submission(self, task):
-        with mock.patch("taipy.core.submission._submission_manager._SubmissionManager._get_latest") as mck:
-            tp.get_latest_submission(task)
-            mck.assert_called_once_with(task)
-
     def test_cancel_job(self):
         with mock.patch("taipy.core.job._job_manager._JobManager._cancel") as mck:
             tp.cancel_job("job_id")
             mck.assert_called_once_with("job_id")
 
+    def test_get_submissions(self):
+        with mock.patch("taipy.core.submission._submission_manager._SubmissionManager._get_all") as mck:
+            tp.get_submissions()
+            mck.assert_called_once_with()
+
+    def test_get_submission(self, task):
+        with mock.patch("taipy.core.submission._submission_manager._SubmissionManager._get") as mck:
+            submission_id = SubmissionId("SUBMISSION_id")
+            tp.get(submission_id)
+            mck.assert_called_once_with(submission_id)
+
+    def test_get_latest_submission(self, task):
+        with mock.patch("taipy.core.submission._submission_manager._SubmissionManager._get_latest") as mck:
+            tp.get_latest_submission(task)
+            mck.assert_called_once_with(task)
+
     def test_block_config_when_core_is_running(self):
-        Config.configure_job_executions(mode=JobConfig._STANDALONE_MODE)
         input_cfg_1 = Config.configure_data_node(id="i1", storage_type="pickle", scope=Scope.SCENARIO, default_data=1)
         output_cfg_1 = Config.configure_data_node(id="o1", storage_type="pickle", scope=Scope.SCENARIO)
         task_cfg_1 = Config.configure_task("t1", print, input_cfg_1, output_cfg_1)
@@ -622,28 +634,33 @@ class TestTaipy:
             mck.assert_called_once_with(cycle_id)
 
     def test_create_global_data_node(self):
-        dn_cfg = DataNodeConfig("id", "pickle", Scope.GLOBAL)
-        with mock.patch("taipy.core.data._data_manager._DataManager._create_and_set") as mck:
-            dn = tp.create_global_data_node(dn_cfg)
-            mck.assert_called_once_with(dn_cfg, None, None)
+        dn_cfg_global = DataNodeConfig("id", "pickle", Scope.GLOBAL)
+        dn_cfg_scenario = DataNodeConfig("id", "pickle", Scope.SCENARIO)
+        with mock.patch("taipy.core.data._data_manager._DataManager._create_and_set") as dn_create_mock:
+            with mock.patch("taipy.core._core.Core._manage_version_and_block_config") as mv_mock:
+                dn = tp.create_global_data_node(dn_cfg_global)
+                dn_create_mock.assert_called_once_with(dn_cfg_global, None, None)
+                mv_mock.assert_called_once()
 
-        dn = tp.create_global_data_node(dn_cfg)
+        dn = tp.create_global_data_node(dn_cfg_global)
         assert dn.scope == Scope.GLOBAL
-        assert dn.config_id == dn_cfg.id
+        assert dn.config_id == dn_cfg_global.id
+        assert _VersionManager._get(dn.version) is not None
 
         # Create a global data node from the same configuration should return the same data node
-        dn_2 = tp.create_global_data_node(dn_cfg)
+        dn_2 = tp.create_global_data_node(dn_cfg_global)
         assert dn_2.id == dn.id
 
-        dn_cfg.scope = Scope.SCENARIO
         with pytest.raises(DataNodeConfigIsNotGlobal):
-            tp.create_global_data_node(dn_cfg)
+            tp.create_global_data_node(dn_cfg_scenario)
 
-    def test_create_scenario(self, scenario):
+    def test_create_scenario(self):
         scenario_config = ScenarioConfig("scenario_config")
         with mock.patch("taipy.core.scenario._scenario_manager._ScenarioManager._create") as mck:
-            tp.create_scenario(scenario_config)
-            mck.assert_called_once_with(scenario_config, None, None)
+            with mock.patch("taipy.core._core.Core._manage_version_and_block_config") as mv_mock:
+                tp.create_scenario(scenario_config)
+                mck.assert_called_once_with(scenario_config, None, None)
+                mv_mock.assert_called_once()
         with mock.patch("taipy.core.scenario._scenario_manager._ScenarioManager._create") as mck:
             tp.create_scenario(scenario_config, datetime.datetime(2022, 2, 5))
             mck.assert_called_once_with(scenario_config, datetime.datetime(2022, 2, 5), None)
@@ -699,7 +716,7 @@ class TestTaipy:
         assert sorted(os.listdir("./tmp/exp_scenario_1/cycles")) == sorted([f"{scenario_2.cycle.id}.json"])
 
         with pytest.raises(InvalidExportPath):
-            tp.export_scenario(scenario_2.id, Config.core.storage_folder)
+            tp.export_scenario(scenario_2.id, Config.core.taipy_storage_folder)
 
         shutil.rmtree("./tmp", ignore_errors=True)
 

@@ -227,7 +227,8 @@ class _Evaluator:
             ctx.update(self.__global_ctx)
             # entries in var_val are not always seen (NameError) when passed as locals
             ctx.update(var_val)
-            expr_evaluated = eval(not_encoded_expr if is_edge_case else expr_string, ctx)
+            with gui._get_autorization():
+                expr_evaluated = eval(not_encoded_expr if is_edge_case else expr_string, ctx)
         except Exception as e:
             _warn(f"Cannot evaluate expression '{not_encoded_expr if is_edge_case else expr_string}'", e)
             expr_evaluated = None
@@ -239,24 +240,26 @@ class _Evaluator:
         This function will execute when the __request_var_update function receive a refresh order
         """
         expr = self.__hash_to_expr.get(var_name)
-        if expr:
-            expr_decoded, _ = _variable_decode(expr)
-            var_map = self.__expr_to_var_map.get(expr, {})
-            eval_dict = {k: _getscopeattr_drill(gui, gui._bind_var(v)) for k, v in var_map.items()}
-            if self._is_expression(expr_decoded):
-                expr_string = 'f"' + _variable_decode(expr)[0].replace('"', '\\"') + '"'
-            else:
-                expr_string = expr_decoded
-            try:
-                ctx: t.Dict[str, t.Any] = {}
-                ctx.update(self.__global_ctx)
-                ctx.update(eval_dict)
-                expr_evaluated = eval(expr_string, ctx)
-                _setscopeattr(gui, var_name, expr_evaluated)
-                if holder is not None:
-                    holder.set(expr_evaluated)
-            except Exception as e:
-                _warn(f"Exception raised evaluating {expr_string}", e)
+        if not expr:
+            return
+
+        expr_decoded, _ = _variable_decode(expr)
+        var_map = self.__expr_to_var_map.get(expr, {})
+        eval_dict = {k: _getscopeattr_drill(gui, gui._bind_var(v)) for k, v in var_map.items()}
+        if self._is_expression(expr_decoded):
+            expr_string = 'f"' + _variable_decode(expr)[0].replace('"', '\\"') + '"'
+        else:
+            expr_string = expr_decoded
+        try:
+            ctx: t.Dict[str, t.Any] = {}
+            ctx.update(self.__global_ctx)
+            ctx.update(eval_dict)
+            expr_evaluated = eval(expr_string, ctx)
+            _setscopeattr(gui, var_name, expr_evaluated)
+            if holder is not None:
+                holder.set(expr_evaluated)
+        except Exception as e:
+            _warn(f"Exception raised evaluating {expr_string}", e)
 
     def re_evaluate_expr(self, gui: Gui, var_name: str) -> t.Set[str]:
         """

@@ -24,8 +24,10 @@ from .sequence.sequence import Sequence
 from .sequence.sequence_id import SequenceId
 from .submission.submission import Submission
 from .submission.submission_id import SubmissionId
+from .submission.submission_status import SubmissionStatus
 from .taipy import (
     cancel_job,
+    clean_all_entities,
     clean_all_entities_by_version,
     compare_scenarios,
     create_global_data_node,
@@ -42,11 +44,13 @@ from .taipy import (
     get_entities_by_config_id,
     get_jobs,
     get_latest_job,
+    get_latest_submission,
     get_parents,
     get_primary,
     get_primary_scenarios,
     get_scenarios,
     get_sequences,
+    get_submissions,
     get_tasks,
     is_deletable,
     is_editable,

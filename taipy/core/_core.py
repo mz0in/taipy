@@ -15,7 +15,6 @@ from typing import Optional
 from taipy.config import Config
 from taipy.logger._taipy_logger import _TaipyLogger
 
-from ._backup._backup import _init_backup_file_with_storage_folder
 from ._core_cli import _CoreCLI
 from ._orchestrator._dispatcher._job_dispatcher import _JobDispatcher
 from ._orchestrator._orchestrator import _Orchestrator
@@ -33,6 +32,9 @@ class Core:
     _is_running = False
     __lock_is_running = Lock()
 
+    _version_is_initialized = False
+    __lock_version_is_initialized = Lock()
+
     __logger = _TaipyLogger._get_logger()
 
     _orchestrator: Optional[_Orchestrator] = None
@@ -48,8 +50,8 @@ class Core:
         """
         Start a Core service.
 
-        This function checks the configuration, manages application's version,
-        and starts a dispatcher and lock the Config.
+        This function checks and locks the configuration, manages application's version,
+        and starts a job dispatcher.
         """
         if self.__class__._is_running:
             raise CoreServiceIsAlreadyRunning
@@ -57,49 +59,72 @@ class Core:
         with self.__class__.__lock_is_running:
             self.__class__._is_running = True
 
-        self.__update_core_section()
-        self.__manage_version()
-        self.__check_and_block_config()
-
-        if self._orchestrator is None:
-            self._orchestrator = _OrchestratorFactory._build_orchestrator()
-
+        self._manage_version_and_block_config()
         self.__start_dispatcher(force_restart)
+        self.__logger.info("Core service has been started.")
 
-    def stop(self):
+    def stop(self, wait: bool = True, timeout: Optional[float] = None):
         """
         Stop the Core service.
-
         This function stops the dispatcher and unblock the Config for update.
+
+        Parameters:
+            wait (bool): If True, the method will wait for the dispatcher to stop.
+            timeout (Optional[float]): The maximum time to wait. If None, the method will wait indefinitely.
         """
+        self.__logger.info("Unblocking configuration update...")
         Config.unblock_update()
 
+        self.__logger.info("Stopping job dispatcher...")
         if self._dispatcher:
-            self._dispatcher = _OrchestratorFactory._remove_dispatcher()
-            self.__logger.info("Core service has been stopped.")
-
+            self._dispatcher = _OrchestratorFactory._remove_dispatcher(wait, timeout)
         with self.__class__.__lock_is_running:
             self.__class__._is_running = False
+        with self.__class__.__lock_version_is_initialized:
+            self.__class__._version_is_initialized = False
+        self.__logger.info("Core service has been stopped.")
 
-    @staticmethod
-    def __update_core_section():
+    @classmethod
+    def _manage_version_and_block_config(cls):
+        """
+        Manage the application's version and block the Config from updates.
+        """
+        if cls._version_is_initialized:
+            return
+
+        with cls.__lock_version_is_initialized:
+            cls._version_is_initialized = True
+
+        cls.__update_core_section()
+        cls.__manage_version()
+        cls.__check_and_block_config()
+
+    @classmethod
+    def __update_core_section(cls):
+        cls.__logger.info("Updating configuration with command-line arguments...")
         _CoreCLI.create_parser()
-        Config._applied_config._unique_sections[CoreSection.name]._update(_CoreCLI.parse_arguments())
+        Config._applied_config._unique_sections[CoreSection.name]._update(_CoreCLI.handle_command())
 
-    @staticmethod
-    def __manage_version():
+    @classmethod
+    def __manage_version(cls):
+        cls.__logger.info("Managing application's version...")
         _VersionManagerFactory._build_manager()._manage_version()
         Config._applied_config._unique_sections[CoreSection.name]._update(
             {"version_number": _VersionManagerFactory._build_manager()._get_latest_version()}
         )
 
-    @staticmethod
-    def __check_and_block_config():
+    @classmethod
+    def __check_and_block_config(cls):
+        cls.__logger.info("Checking application's version...")
         Config.check()
+        cls.__logger.info("Blocking configuration update...")
         Config.block_update()
-        _init_backup_file_with_storage_folder()
 
     def __start_dispatcher(self, force_restart):
+        self.__logger.info("Starting job dispatcher...")
+        if self._orchestrator is None:
+            self._orchestrator = _OrchestratorFactory._build_orchestrator()
+
         if dispatcher := _OrchestratorFactory._build_dispatcher(force_restart=force_restart):
             self._dispatcher = dispatcher
 

@@ -133,7 +133,7 @@ Config = t.TypedDict(
         "use_reloader": bool,
         "watermark": t.Optional[str],
         "webapp_path": t.Optional[str],
-        "port": int,
+        "port": t.Union[t.Literal["auto"], int],
     },
     total=False,
 )
@@ -185,11 +185,13 @@ class _Config(object):
 
     def _handle_argparse(self):
         _GuiCLI.create_parser()
-        args = _GuiCLI.parse_arguments()
+        args = _GuiCLI.handle_command()
 
         config = self.config
         if args.taipy_port:
-            if not _Config.__RE_PORT_NUMBER.match(args.taipy_port):
+            if str(args.taipy_port).strip() == "auto":
+                config["port"] = "auto"
+            elif not _Config.__RE_PORT_NUMBER.match(args.taipy_port):
                 _warn("Port value for --port option is not valid.")
             else:
                 config["port"] = int(args.taipy_port)
@@ -209,6 +211,10 @@ class _Config(object):
             config["webapp_path"] = args.taipy_webapp_path
         elif os.environ.get("TAIPY_GUI_WEBAPP_PATH"):
             config["webapp_path"] = os.environ.get("TAIPY_GUI_WEBAPP_PATH")
+        if args.taipy_upload_folder:
+            config["upload_folder"] = args.taipy_upload_folder
+        elif os.environ.get("TAIPY_GUI_UPLOAD_FOLDER"):
+            config["webapp_path"] = os.environ.get("TAIPY_GUI_UPLOAD_FOLDER")
 
     def _build_config(self, root_dir, env_filename, kwargs):  # pragma: no cover
         config = self.config
@@ -226,6 +232,8 @@ class _Config(object):
                 try:
                     if isinstance(value, dict) and isinstance(config[key], dict):
                         config[key].update(value)
+                    elif key == "port" and str(value).strip() == "auto":
+                        config["port"] = "auto"
                     else:
                         config[key] = value if config[key] is None else type(config[key])(value)  # type: ignore
                 except Exception as e:
@@ -239,7 +247,10 @@ class _Config(object):
                 key = key.lower()
                 if value is not None and key in config:
                     try:
-                        config[key] = value if config[key] is None else type(config[key])(value)  # type: ignore
+                        if key == "port" and str(value).strip() == "auto":
+                            config["port"] = "auto"
+                        else:
+                            config[key] = value if config[key] is None else type(config[key])(value)  # type: ignore
                     except Exception as e:
                         _warn(
                             f"Invalid env value in Gui.run(): {key} - {value}. Unable to parse value to the correct type",  # noqa: E501
@@ -283,7 +294,7 @@ class _Config(object):
 
         if app_config["use_reloader"] and not app_config["debug"]:
             app_config["debug"] = True
-            self.__log_outside_reloader(logger, "application is running in 'debug' mode")
+            self.__log_outside_reloader(logger, "Application is running in 'debug' mode")
 
         if app_config["debug"] and not app_config["allow_unsafe_werkzeug"]:
             app_config["allow_unsafe_werkzeug"] = True

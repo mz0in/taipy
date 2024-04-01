@@ -17,7 +17,7 @@ from typing import Any, Dict, Iterable, Iterator, List, Optional, Type, Union
 
 from taipy.config.config import Config
 
-from ..common._utils import _retry_read_entity
+from ..common._utils import _retry_repository_operation
 from ..common.typing import Converter, Entity, Json, ModelType
 from ..exceptions import FileCannotBeRead, InvalidExportPath, ModelNotFound
 from ._abstract_repository import _AbstractRepository
@@ -52,7 +52,7 @@ class _FileSystemRepository(_AbstractRepository[ModelType, Entity]):
 
     @property
     def _storage_folder(self) -> pathlib.Path:
-        return pathlib.Path(Config.core.storage_folder)
+        return pathlib.Path(Config.core.taipy_storage_folder)
 
     ###############################
     # ##   Inherited methods   ## #
@@ -170,10 +170,7 @@ class _FileSystemRepository(_AbstractRepository[ModelType, Entity]):
     def _get_by_config_and_owner_id(
         self, config_id: str, owner_id: Optional[str], filters: Optional[List[Dict]] = None
     ) -> Optional[Entity]:
-        if not filters:
-            filters = [{}]
-        else:
-            filters = copy.deepcopy(filters)
+        filters = [{}] if not filters else copy.deepcopy(filters)
 
         if owner_id is not None:
             for fil in filters:
@@ -225,8 +222,7 @@ class _FileSystemRepository(_AbstractRepository[ModelType, Entity]):
         if isinstance(file_content, str):
             file_content = json.loads(file_content, cls=_Decoder)
         model = self.model_type.from_dict(file_content)
-        entity = self.converter._model_to_entity(model)
-        return entity
+        return self.converter._model_to_entity(model)
 
     def __filter_by(self, filepath: pathlib.Path, filters: Optional[List[Dict]]) -> Optional[Json]:
         if not filters:
@@ -245,7 +241,7 @@ class _FileSystemRepository(_AbstractRepository[ModelType, Entity]):
                 return json.loads(file_content, cls=_Decoder)
         return None
 
-    @_retry_read_entity(__EXCEPTIONS_TO_RETRY)
+    @_retry_repository_operation(__EXCEPTIONS_TO_RETRY)
     def __read_file(self, filepath: pathlib.Path) -> str:
         if not filepath.is_file():
             raise FileNotFoundError

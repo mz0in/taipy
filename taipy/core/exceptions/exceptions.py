@@ -9,7 +9,6 @@
 # an "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied. See the License for the
 # specific language governing permissions and limitations under the License.
 
-
 from typing import List, Optional
 
 
@@ -18,7 +17,9 @@ class ConfigCoreVersionMismatched(Exception):
 
     def __init__(self, config_core_version: str, core_version: str) -> None:
         self.message = (
-            f"Core version {config_core_version} in Config does not match with version of Taipy Core {core_version}."
+            f"The version {config_core_version} of Core's entities does not match version of Taipy Core {core_version}."
+            f" Please update the core entities to be compatible with Taipy Core {core_version}"
+            " using the `taipy migrate ...` command. For more information, please run `taipy help migrate`"
         )
 
 
@@ -186,8 +187,18 @@ class InvalidSequence(Exception):
 class NonExistingSequence(Exception):
     """Raised if a requested Sequence is not known by the Sequence Manager."""
 
-    def __init__(self, sequence_id: str):
-        self.message = f"Sequence: {sequence_id} does not exist."
+    def __init__(self, sequence_id: str, scenario_id: str = None):
+        if scenario_id:
+            self.message = f"Sequence: {sequence_id} does not exist in scenario {scenario_id}."
+        else:
+            self.message = f"Sequence: {sequence_id} does not exist."
+
+
+class SequenceAlreadyExists(Exception):
+    """Raised if a Sequence already exists."""
+
+    def __init__(self, sequence_name: str, scenario_id: str):
+        self.message = f"Sequence: {sequence_name} already exists in scenario {scenario_id}."
 
 
 class SequenceBelongsToNonExistingScenario(Exception):
@@ -360,6 +371,10 @@ class InvalidEventOperation(Exception):
 
 class FileCannotBeRead(Exception):
     """Raised when a file cannot be read."""
+
+
+class SQLQueryCannotBeExecuted(Exception):
+    """Raised when an SQL Query cannot be executed."""
 
 
 class _SuspiciousFileOperation(Exception):

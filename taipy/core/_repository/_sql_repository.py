@@ -11,18 +11,24 @@
 
 import json
 import pathlib
+from sqlite3 import DatabaseError
 from typing import Any, Dict, Iterable, List, Optional, Type, Union
 
 from sqlalchemy.dialects import sqlite
-from sqlalchemy.exc import NoResultFound
+from sqlalchemy.exc import NoResultFound, OperationalError
 
+from ...logger._taipy_logger import _TaipyLogger
 from .._repository._abstract_repository import _AbstractRepository
+from ..common._utils import _retry_repository_operation
 from ..common.typing import Converter, Entity, ModelType
 from ..exceptions import ModelNotFound
 from .db._sql_connection import _SQLConnection
 
 
 class _SQLRepository(_AbstractRepository[ModelType, Entity]):
+    __EXCEPTIONS_TO_RETRY = (OperationalError,)
+    _logger = _TaipyLogger._get_logger()
+
     def __init__(self, model_type: Type[ModelType], converter: Type[Converter]):
         """
         Holds common methods to be used and extended when the need for saving
@@ -47,14 +53,25 @@ class _SQLRepository(_AbstractRepository[ModelType, Entity]):
     def _save(self, entity: Entity):
         obj = self.converter._entity_to_model(entity)
         if self._exists(entity.id):  # type: ignore
-            self._update_entry(obj)
-            return
-        self.__insert_model(obj)
+            try:
+                self._update_entry(obj)
+                return
+            except DatabaseError as e:
+                self._logger.error(f"Error while updating {entity.id} in {self.table.name}. ")  # type: ignore
+                self._logger.error(f"Error : {e}")
+                raise e
+        try:
+            self.__insert_model(obj)
+        except DatabaseError as e:
+            self._logger.error(f"Error while inserting {entity.id} into {self.table.name}. ")  # type: ignore
+            self._logger.error(f"Error : {e}")
+            raise e
 
     def _exists(self, entity_id: str):
         query = self.table.select().filter_by(id=entity_id)
         return bool(self.db.execute(str(query), [entity_id]).fetchone())
 
+    @_retry_repository_operation(__EXCEPTIONS_TO_RETRY)
     def _load(self, entity_id: str) -> Entity:
         query = self.table.select().filter_by(id=entity_id)
 
@@ -165,8 +182,7 @@ class _SQLRepository(_AbstractRepository[ModelType, Entity]):
         configs_and_owner_ids = set(configs_and_owner_ids)
 
         for config, owner in configs_and_owner_ids:
-            entry = self.__get_entities_by_config_and_owner(config.id, owner, filters)
-            if entry:
+            if entry := self.__get_entities_by_config_and_owner(config.id, owner, filters):
                 entity = self.converter._model_to_entity(entry)
                 key = config, owner
                 res[key] = entity
@@ -190,7 +206,7 @@ class _SQLRepository(_AbstractRepository[ModelType, Entity]):
 
         if versions:
             table_name = self.table.name
-            query = query + f" AND {table_name}.version IN ({','.join(['?']*len(versions))})"
+            query += f" AND {table_name}.version IN ({','.join(['?'] * len(versions))})"
             parameters.extend(versions)
 
         if entry := self.db.execute(query, parameters).fetchone():
@@ -200,15 +216,18 @@ class _SQLRepository(_AbstractRepository[ModelType, Entity]):
     #############################
     # ##   Private methods   ## #
     #############################
+    @_retry_repository_operation(__EXCEPTIONS_TO_RETRY)
     def __insert_model(self, model: ModelType):
         query = self.table.insert()
         self.db.execute(str(query.compile(dialect=sqlite.dialect())), model.to_list())
         self.db.commit()
 
+    @_retry_repository_operation(__EXCEPTIONS_TO_RETRY)
     def _update_entry(self, model):
         query = self.table.update().filter_by(id=model.id)
-        self.db.execute(str(query.compile(dialect=sqlite.dialect())), model.to_list() + [model.id])
+        cursor = self.db.execute(str(query.compile(dialect=sqlite.dialect())), model.to_list() + [model.id])
         self.db.commit()
+        cursor.close()
 
     @staticmethod
     def __serialize_filter_values(value):

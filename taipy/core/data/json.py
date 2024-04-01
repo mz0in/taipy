@@ -20,15 +20,14 @@ from typing import Any, Dict, List, Optional, Set
 
 from taipy.config.common.scope import Scope
 
-from .._backup._backup import _replace_in_backup_file
 from .._entity._reload import _self_reload
 from .._version._version_manager_factory import _VersionManagerFactory
-from ._abstract_file import _AbstractFileDataNode
+from ._abstract_file import _FileDataNodeMixin
 from .data_node import DataNode
 from .data_node_id import DataNodeId, Edit
 
 
-class JSONDataNode(DataNode, _AbstractFileDataNode):
+class JSONDataNode(DataNode, _FileDataNodeMixin):
     """Data Node stored as a JSON file.
 
     Attributes:
@@ -111,6 +110,9 @@ class JSONDataNode(DataNode, _AbstractFileDataNode):
             **properties,
         )
         self._path = properties.get(self.__PATH_KEY, properties.get(self.__DEFAULT_PATH_KEY))
+        if self._path and ".data" in self._path:
+            self._path = self._migrate_path(self.storage_type(), self._path)
+
         if not self._path:
             self._path = self._build_path(self.storage_type())
         properties[self.__PATH_KEY] = self._path
@@ -156,10 +158,8 @@ class JSONDataNode(DataNode, _AbstractFileDataNode):
 
     @path.setter
     def path(self, value):
-        tmp_old_path = self._path
         self._path = value
         self.properties[self.__PATH_KEY] = value
-        _replace_in_backup_file(old_file_path=tmp_old_path, new_file_path=self._path)
 
     @property  # type: ignore
     @_self_reload(DataNode._MANAGER_NAME)

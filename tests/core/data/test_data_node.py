@@ -20,8 +20,6 @@ import taipy.core as tp
 from taipy.config import Config
 from taipy.config.common.scope import Scope
 from taipy.config.exceptions.exceptions import InvalidConfigurationId
-from taipy.core._orchestrator._orchestrator_factory import _OrchestratorFactory
-from taipy.core.config.job_config import JobConfig
 from taipy.core.data._data_manager import _DataManager
 from taipy.core.data.data_node import DataNode
 from taipy.core.data.data_node_id import DataNodeId
@@ -70,7 +68,7 @@ class TestDataNode:
             "a_scenario_id",
             {"a_parent_id"},
             a_date,
-            [dict(job_id="a_job_id")],
+            [{"job_id": "a_job_id"}],
             edit_in_progress=False,
             prop="erty",
             name="a name",
@@ -355,8 +353,6 @@ class TestDataNode:
         assert not dn_3.is_up_to_date
 
     def test_do_not_recompute_data_node_valid_but_continue_sequence_execution(self):
-        Config.configure_job_executions(mode=JobConfig._DEVELOPMENT_MODE)
-
         a = Config.configure_data_node("A", "pickle", default_data="A")
         b = Config.configure_data_node("B", "pickle")
         c = Config.configure_data_node("C", "pickle")
@@ -366,8 +362,6 @@ class TestDataNode:
         task_b_c = Config.configure_task("task_b_c", funct_b_c, input=b, output=c)
         task_b_d = Config.configure_task("task_b_d", funct_b_d, input=b, output=d)
         scenario_cfg = Config.configure_scenario("scenario", [task_a_b, task_b_c, task_b_d])
-
-        _OrchestratorFactory._build_dispatcher()
 
         scenario = tp.create_scenario(scenario_cfg)
         scenario.submit()
@@ -414,7 +408,7 @@ class TestDataNode:
             owner_id=None,
             parent_ids=None,
             last_edit_date=current_datetime,
-            edits=[dict(job_id="a_job_id")],
+            edits=[{"job_id": "a_job_id"}],
             edit_in_progress=False,
             validity_period=None,
             properties={
@@ -498,6 +492,57 @@ class TestDataNode:
         assert dn_1.validity_period == time_period_2
         assert dn_2.validity_period == time_period_2
 
+        dn_1.last_edit_date = new_datetime
+
+        assert len(dn_1.job_ids) == 1
+        assert len(dn_2.job_ids) == 1
+
+        with dn_1 as dn:
+            assert dn.config_id == "foo"
+            assert dn.owner_id is None
+            assert dn.scope == Scope.SCENARIO
+            assert dn.last_edit_date == new_datetime
+            assert dn.name == "def"
+            assert dn.edit_in_progress
+            assert dn.validity_period == time_period_2
+            assert len(dn.job_ids) == 1
+            assert dn._is_in_context
+
+            new_datetime_2 = new_datetime + timedelta(5)
+
+            dn.scope = Scope.CYCLE
+            dn.last_edit_date = new_datetime_2
+            dn.name = "abc"
+            dn.edit_in_progress = False
+            dn.validity_period = None
+
+            assert dn.config_id == "foo"
+            assert dn.owner_id is None
+            assert dn.scope == Scope.SCENARIO
+            assert dn.last_edit_date == new_datetime
+            assert dn.name == "def"
+            assert dn.edit_in_progress
+            assert dn.validity_period == time_period_2
+            assert len(dn.job_ids) == 1
+
+        assert dn_1.config_id == "foo"
+        assert dn_1.owner_id is None
+        assert dn_1.scope == Scope.CYCLE
+        assert dn_1.last_edit_date == new_datetime_2
+        assert dn_1.name == "abc"
+        assert not dn_1.edit_in_progress
+        assert dn_1.validity_period is None
+        assert not dn_1._is_in_context
+        assert len(dn_1.job_ids) == 1
+
+    def test_auto_set_and_reload_properties(self):
+        dn_1 = InMemoryDataNode("foo", scope=Scope.GLOBAL, properties={"name": "def"})
+
+        dm = _DataManager()
+        dm._set(dn_1)
+
+        dn_2 = dm._get(dn_1)
+
         # auto set & reload on properties attribute
         assert dn_1.properties == {"name": "def"}
         assert dn_2.properties == {"name": "def"}
@@ -519,130 +564,51 @@ class TestDataNode:
             "temp_key_1": "temp_value_1",
             "temp_key_2": "temp_value_2",
         }
-        assert dn_2.properties == {
-            "name": "def",
-            "qux": 5,
-            "temp_key_1": "temp_value_1",
-            "temp_key_2": "temp_value_2",
-        }
+        assert dn_2.properties == {"name": "def", "qux": 5, "temp_key_1": "temp_value_1", "temp_key_2": "temp_value_2"}
         dn_1.properties.pop("temp_key_1")
         assert "temp_key_1" not in dn_1.properties.keys()
         assert "temp_key_1" not in dn_1.properties.keys()
-        assert dn_1.properties == {
-            "name": "def",
-            "qux": 5,
-            "temp_key_2": "temp_value_2",
-        }
-        assert dn_2.properties == {
-            "name": "def",
-            "qux": 5,
-            "temp_key_2": "temp_value_2",
-        }
+        assert dn_1.properties == {"name": "def", "qux": 5, "temp_key_2": "temp_value_2"}
+        assert dn_2.properties == {"name": "def", "qux": 5, "temp_key_2": "temp_value_2"}
         dn_2.properties.pop("temp_key_2")
-        assert dn_1.properties == {
-            "qux": 5,
-            "name": "def",
-        }
-        assert dn_2.properties == {
-            "qux": 5,
-            "name": "def",
-        }
+        assert dn_1.properties == {"qux": 5, "name": "def"}
+        assert dn_2.properties == {"qux": 5, "name": "def"}
         assert "temp_key_2" not in dn_1.properties.keys()
         assert "temp_key_2" not in dn_2.properties.keys()
 
         dn_1.properties["temp_key_3"] = 0
-        assert dn_1.properties == {
-            "qux": 5,
-            "temp_key_3": 0,
-            "name": "def",
-        }
-        assert dn_2.properties == {
-            "qux": 5,
-            "temp_key_3": 0,
-            "name": "def",
-        }
+        assert dn_1.properties == {"qux": 5, "temp_key_3": 0, "name": "def"}
+        assert dn_2.properties == {"qux": 5, "temp_key_3": 0, "name": "def"}
         dn_1.properties.update({"temp_key_3": 1})
-        assert dn_1.properties == {
-            "qux": 5,
-            "temp_key_3": 1,
-            "name": "def",
-        }
-        assert dn_2.properties == {
-            "qux": 5,
-            "temp_key_3": 1,
-            "name": "def",
-        }
-        dn_1.properties.update(dict())
-        assert dn_1.properties == {
-            "qux": 5,
-            "temp_key_3": 1,
-            "name": "def",
-        }
-        assert dn_2.properties == {
-            "qux": 5,
-            "temp_key_3": 1,
-            "name": "def",
-        }
+        assert dn_1.properties == {"qux": 5, "temp_key_3": 1, "name": "def"}
+        assert dn_2.properties == {"qux": 5, "temp_key_3": 1, "name": "def"}
+        dn_1.properties.update({})
+        assert dn_1.properties == {"qux": 5, "temp_key_3": 1, "name": "def"}
+        assert dn_2.properties == {"qux": 5, "temp_key_3": 1, "name": "def"}
         dn_1.properties["temp_key_4"] = 0
         dn_1.properties["temp_key_5"] = 0
 
-        dn_1.last_edit_date = new_datetime
-
-        assert len(dn_1.job_ids) == 1
-        assert len(dn_2.job_ids) == 1
-
         with dn_1 as dn:
-            assert dn.config_id == "foo"
-            assert dn.owner_id is None
-            assert dn.scope == Scope.SCENARIO
-            assert dn.last_edit_date == new_datetime
-            assert dn.name == "def"
-            assert dn.edit_in_progress
-            assert dn.validity_period == time_period_2
-            assert len(dn.job_ids) == 1
             assert dn._is_in_context
             assert dn.properties["qux"] == 5
             assert dn.properties["temp_key_3"] == 1
             assert dn.properties["temp_key_4"] == 0
             assert dn.properties["temp_key_5"] == 0
 
-            new_datetime_2 = new_datetime + timedelta(5)
-
-            dn.scope = Scope.CYCLE
-            dn.last_edit_date = new_datetime_2
-            dn.name = "abc"
-            dn.edit_in_progress = False
-            dn.validity_period = None
             dn.properties["qux"] = 9
             dn.properties.pop("temp_key_3")
             dn.properties.pop("temp_key_4")
             dn.properties.update({"temp_key_4": 1})
             dn.properties.update({"temp_key_5": 2})
             dn.properties.pop("temp_key_5")
-            dn.properties.update(dict())
+            dn.properties.update({})
 
-            assert dn.config_id == "foo"
-            assert dn.owner_id is None
-            assert dn.scope == Scope.SCENARIO
-            assert dn.last_edit_date == new_datetime
-            assert dn.name == "def"
-            assert dn.edit_in_progress
-            assert dn.validity_period == time_period_2
-            assert len(dn.job_ids) == 1
             assert dn.properties["qux"] == 5
             assert dn.properties["temp_key_3"] == 1
             assert dn.properties["temp_key_4"] == 0
             assert dn.properties["temp_key_5"] == 0
 
-        assert dn_1.config_id == "foo"
-        assert dn_1.owner_id is None
-        assert dn_1.scope == Scope.CYCLE
-        assert dn_1.last_edit_date == new_datetime_2
-        assert dn_1.name == "abc"
-        assert not dn_1.edit_in_progress
-        assert dn_1.validity_period is None
         assert not dn_1._is_in_context
-        assert len(dn_1.job_ids) == 1
         assert dn_1.properties["qux"] == 9
         assert "temp_key_3" not in dn_1.properties.keys()
         assert dn_1.properties["temp_key_4"] == 1
@@ -715,7 +681,7 @@ class TestDataNode:
             "a_scenario_id",
             {"a_parent_id"},
             a_date,
-            [dict(job_id="a_job_id")],
+            [{"job_id": "a_job_id"}],
             edit_in_progress=False,
             prop="erty",
             name="a name",
@@ -741,7 +707,7 @@ class TestDataNode:
             "a_scenario_id",
             {"a_parent_id"},
             a_date,
-            [dict(job_id="a_job_id")],
+            [{"job_id": "a_job_id"}],
             edit_in_progress=False,
             label="a label",
             name="a name",

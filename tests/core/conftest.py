@@ -14,6 +14,7 @@ import pickle
 import shutil
 from datetime import datetime
 from queue import Queue
+from unittest.mock import patch
 
 import pandas as pd
 import pytest
@@ -56,11 +57,11 @@ from taipy.core.sequence._sequence_manager_factory import _SequenceManagerFactor
 from taipy.core.sequence.sequence import Sequence
 from taipy.core.sequence.sequence_id import SequenceId
 from taipy.core.submission._submission_manager_factory import _SubmissionManagerFactory
+from taipy.core.submission.submission import Submission
 from taipy.core.task._task_manager_factory import _TaskManagerFactory
 from taipy.core.task.task import Task
 
 current_time = datetime.now()
-_OrchestratorFactory._build_orchestrator()
 
 
 @pytest.fixture(scope="function")
@@ -179,10 +180,9 @@ def default_multi_sheet_data_frame():
 def cleanup_files():
     yield
 
-    if os.path.exists(".data"):
-        shutil.rmtree(".data", ignore_errors=True)
-    if os.path.exists(".my_data"):
-        shutil.rmtree(".my_data", ignore_errors=True)
+    for path in [".data", ".my_data", "user_data", ".taipy"]:
+        if os.path.exists(path):
+            shutil.rmtree(path, ignore_errors=True)
 
 
 @pytest.fixture(scope="function")
@@ -222,7 +222,7 @@ def data_node_model():
         "owner_id",
         list({"parent_id_1", "parent_id_2"}),
         datetime(1985, 10, 14, 2, 30, 0).isoformat(),
-        [dict(timestamp=datetime(1985, 10, 14, 2, 30, 0).isoformat(), job_id="job_id")],
+        [{"timestamp": datetime(1985, 10, 14, 2, 30, 0).isoformat(), "job_id": "job_id"}],
         "latest",
         None,
         None,
@@ -275,7 +275,7 @@ def sequence():
         [],
         SequenceId("sequence_id"),
         owner_id="owner_id",
-        parent_ids=set(["parent_id_1", "parent_id_2"]),
+        parent_ids={"parent_id_1", "parent_id_2"},
         version="random_version_number",
     )
 
@@ -283,6 +283,11 @@ def sequence():
 @pytest.fixture(scope="function")
 def job(task):
     return Job(JobId("job"), task, "foo", "bar", version="random_version_number")
+
+
+@pytest.fixture(scope="function")
+def submission(task):
+    return Submission(task.id, task._ID_PREFIX, task.config_id, properties={})
 
 
 @pytest.fixture(scope="function")
@@ -310,7 +315,8 @@ def tmp_sqlite(tmpdir_factory):
 
 
 @pytest.fixture(scope="function", autouse=True)
-def clean_repository(init_config, init_managers, init_orchestrator, init_notifier):
+def clean_repository(init_config, init_managers, init_orchestrator, init_notifier, clean_argparser):
+    clean_argparser()
     close_all_sessions()
     init_config()
     init_orchestrator()
@@ -318,7 +324,15 @@ def clean_repository(init_config, init_managers, init_orchestrator, init_notifie
     init_config()
     init_notifier()
 
-    yield
+    with patch("sys.argv", ["prog"]):
+        yield
+
+    clean_argparser()
+    close_all_sessions()
+    init_orchestrator()
+    init_managers()
+    init_config()
+    init_notifier()
 
 
 @pytest.fixture
@@ -337,6 +351,7 @@ def init_config(reset_configuration_singleton, inject_core_sections):
 
         Config.configure_core(read_entity_retry=0)
         Core._is_running = False
+        Core._version_is_initialized = False
 
     return _init_config
 
@@ -359,9 +374,11 @@ def init_managers():
 @pytest.fixture
 def init_orchestrator():
     def _init_orchestrator():
+        _OrchestratorFactory._remove_dispatcher()
+
         if _OrchestratorFactory._orchestrator is None:
             _OrchestratorFactory._build_orchestrator()
-        _OrchestratorFactory._build_dispatcher()
+        _OrchestratorFactory._build_dispatcher(force_restart=True)
         _OrchestratorFactory._orchestrator.jobs_to_run = Queue()
         _OrchestratorFactory._orchestrator.blocked_jobs = []
 
@@ -382,7 +399,7 @@ def sql_engine():
 
 
 @pytest.fixture
-def init_sql_repo(tmp_sqlite):
+def init_sql_repo(tmp_sqlite, init_managers):
     Config.configure_core(repository_type="sql", repository_properties={"db_location": tmp_sqlite})
 
     # Clean SQLite database
@@ -390,5 +407,7 @@ def init_sql_repo(tmp_sqlite):
         _SQLConnection._connection.close()
         _SQLConnection._connection = None
     _SQLConnection.init_db()
+
+    init_managers()
 
     return tmp_sqlite

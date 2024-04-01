@@ -22,7 +22,6 @@ import typing as t
 import webbrowser
 from importlib import util
 from random import randint
-from urllib.parse import parse_qsl, urlparse
 
 from flask import Blueprint, Flask, json, jsonify, render_template, request, send_from_directory
 from flask_cors import CORS
@@ -49,7 +48,7 @@ class _Server:
     __OPENING_CURLY = r"\1&#x7B;"
     __CLOSING_CURLY = r"&#x7D;\2"
     _RESOURCE_HANDLER_ARG = "tprh"
-    __BASE_FILE_NAME = "taipy-gui-base.js"
+    _CUSTOM_PAGE_META_ARG = "tp_cp_meta"
 
     def __init__(
         self,
@@ -149,18 +148,13 @@ class _Server:
         @taipy_bp.route("/", defaults={"path": ""})
         @taipy_bp.route("/<path:path>")
         def my_index(path):
-            resource_handler_id = dict(parse_qsl(urlparse(request.referrer or "").query)).get(
-                _Server._RESOURCE_HANDLER_ARG
-            )
-            resource_handler_id = resource_handler_id or request.args.get(_Server._RESOURCE_HANDLER_ARG, None)
+            resource_handler_id = request.cookies.get(_Server._RESOURCE_HANDLER_ARG, None)
             if resource_handler_id is not None:
                 resource_handler = _ExternalResourceHandlerManager().get(resource_handler_id)
                 if resource_handler is None:
                     return (f"Invalid value for query {_Server._RESOURCE_HANDLER_ARG}", 404)
                 try:
-                    return resource_handler.get_resources(
-                        path, f"{static_folder}{os.path.sep}{_Server.__BASE_FILE_NAME}"
-                    )
+                    return resource_handler.get_resources(path, static_folder)
                 except Exception as e:
                     raise RuntimeError("Can't get resources from custom resource handler") from e
             if path == "" or path == "index.html" or "." not in path:
@@ -274,6 +268,8 @@ class _Server:
     def run(self, host, port, debug, use_reloader, flask_log, run_in_thread, allow_unsafe_werkzeug, notebook_proxy):
         host_value = host if host != "0.0.0.0" else "localhost"
         self._host = host
+        if port == "auto":
+            port = self._get_random_port()
         self._port = port
         if _is_in_notebook() and notebook_proxy:  # pragma: no cover
             from .utils.proxy import NotebookProxy
@@ -287,7 +283,7 @@ class _Server:
             runtime_manager.add_gui(self._gui, port)
         if debug and not is_running_from_reloader() and _is_port_open(host_value, port):
             raise ConnectionError(
-                f"Port {port} is already opened on {host_value}. You have another server application running on the same port."  # noqa: E501
+                "Port {port} is already opened on {host} because another application is running on the same port. Please pick another port number and rerun with the 'port=<new_port>' option. You can also let Taipy choose a port number for you by running with the 'port=\"auto\"' option."  # noqa: E501
             )
         if not flask_log:
             log = logging.getLogger("werkzeug")

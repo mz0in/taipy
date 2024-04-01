@@ -113,11 +113,11 @@ def test_read_write_toml_configuration_file():
 
 [JOB]
 mode = "development"
-max_nb_of_workers = "1:int"
 
 [CORE]
 root_folder = "./taipy/"
-storage_folder = ".data/"
+storage_folder = "user_data/"
+taipy_storage_folder = ".taipy/"
 repository_type = "filesystem"
 read_entity_retry = "0:int"
 mode = "development"
@@ -204,7 +204,7 @@ sequence1 = [ "test_task:SECTION",]
     assert len(Config.unique_sections) == 3
 
     assert Config.unique_sections[JobConfig.name].mode == "development"
-    assert Config.unique_sections[JobConfig.name].max_nb_of_workers == 1
+    assert Config.unique_sections[JobConfig.name].max_nb_of_workers is None
 
     assert Config.unique_sections[MigrationConfig.name].migration_fcts["1.0"] == {"test_csv_dn": migrate_csv_path}
 
@@ -284,12 +284,12 @@ def test_read_write_json_configuration_file():
         """{
 "TAIPY": {},
 "JOB": {
-"mode": "development",
-"max_nb_of_workers": "1:int"
+"mode": "development"
 },
 "CORE": {
 "root_folder": "./taipy/",
-"storage_folder": ".data/",
+"storage_folder": "user_data/",
+"taipy_storage_folder": ".taipy/",
 "repository_type": "filesystem",
 "read_entity_retry": "0:int",
 "mode": "development",
@@ -405,7 +405,7 @@ def test_read_write_json_configuration_file():
     assert len(Config.unique_sections) == 3
 
     assert Config.unique_sections[JobConfig.name].mode == "development"
-    assert Config.unique_sections[JobConfig.name].max_nb_of_workers == 1
+    assert Config.unique_sections[JobConfig.name].max_nb_of_workers is None
 
     assert Config.unique_sections[MigrationConfig.name].migration_fcts["1.0"] == {"test_csv_dn": migrate_csv_path}
 

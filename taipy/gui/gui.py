@@ -15,8 +15,8 @@ import contextlib
 import importlib
 import inspect
 import json
+import math
 import os
-import pathlib
 import re
 import sys
 import tempfile
@@ -25,12 +25,24 @@ import typing as t
 import warnings
 from importlib import metadata, util
 from importlib.util import find_spec
+from pathlib import Path
+from tempfile import mkstemp
 from types import FrameType, FunctionType, LambdaType, ModuleType, SimpleNamespace
 from urllib.parse import unquote, urlencode, urlparse
 
 import markdown as md_lib
 import tzlocal
-from flask import Blueprint, Flask, g, has_app_context, jsonify, request, send_file, send_from_directory
+from flask import (
+    Blueprint,
+    Flask,
+    g,
+    has_app_context,
+    has_request_context,
+    jsonify,
+    request,
+    send_file,
+    send_from_directory,
+)
 from werkzeug.utils import secure_filename
 
 import __main__  # noqa: F401
@@ -55,11 +67,11 @@ from .data.data_accessor import _DataAccessor, _DataAccessors
 from .data.data_format import _DataFormat
 from .data.data_scope import _DataScopes
 from .extension.library import Element, ElementLibrary
-from .gui_types import _WsType
 from .page import Page
 from .partial import Partial
 from .server import _Server
 from .state import State
+from .types import _WsType
 from .utils import (
     _delscopeattr,
     _filter_locals,
@@ -212,6 +224,9 @@ class Gui:
     __DO_NOT_UPDATE_VALUE = _DoNotUpdate()
     _HTML_CONTENT_KEY = "__taipy_html_content"
     __USER_CONTENT_CB = "custom_user_content_cb"
+    __ROBOTO_FONT = "https://fonts.googleapis.com/css?family=Roboto:300,400,500,700&display=swap"
+    __DOWNLOAD_ACTION = "__Taipy__download_csv"
+    __DOWNLOAD_DELETE_ACTION = "__Taipy__download_delete_csv"
 
     __RE_HTML = re.compile(r"(.*?)\.html$")
     __RE_MD = re.compile(r"(.*?)\.md$")
@@ -330,7 +345,7 @@ class Gui:
 
         # get taipy version
         try:
-            gui_file = pathlib.Path(__file__ or ".").resolve()
+            gui_file = Path(__file__ or ".").resolve()
             with open(gui_file.parent / "version.json") as version_file:
                 self.__version = json.load(version_file)
         except Exception as e:  # pragma: no cover
@@ -507,6 +522,9 @@ class Gui:
     def _get_data_scope(self) -> SimpleNamespace:
         return self.__bindings._get_data_scope()
 
+    def _get_data_scope_metadata(self) -> t.Dict[str, t.Any]:
+        return self.__bindings._get_data_scope_metadata()
+
     def _get_all_data_scopes(self) -> t.Dict[str, SimpleNamespace]:
         return self.__bindings._get_all_scopes()
 
@@ -594,28 +612,47 @@ class Gui:
             self.__set_client_id_in_context(expected_client_id)
             g.ws_client_id = expected_client_id
             with self._set_locals_context(message.get("module_context") or None):
-                payload = message.get("payload", {})
-                if msg_type == _WsType.UPDATE.value:
-                    self.__front_end_update(
-                        str(message.get("name")),
-                        payload.get("value"),
-                        message.get("propagate", True),
-                        payload.get("relvar"),
-                        payload.get("on_change"),
-                    )
-                elif msg_type == _WsType.ACTION.value:
-                    self.__on_action(message.get("name"), message.get("payload"))
-                elif msg_type == _WsType.DATA_UPDATE.value:
-                    self.__request_data_update(str(message.get("name")), message.get("payload"))
-                elif msg_type == _WsType.REQUEST_UPDATE.value:
-                    self.__request_var_update(message.get("payload"))
-                elif msg_type == _WsType.GET_MODULE_CONTEXT.value:
-                    self.__handle_ws_get_module_context(payload)
-                elif msg_type == _WsType.GET_VARIABLES.value:
-                    self.__handle_ws_get_variables()
-            self.__send_ack(message.get("ack_id"))
+                with self._get_autorization():
+                    payload = message.get("payload", {})
+                    if msg_type == _WsType.UPDATE.value:
+                        self.__front_end_update(
+                            str(message.get("name")),
+                            payload.get("value"),
+                            message.get("propagate", True),
+                            payload.get("relvar"),
+                            payload.get("on_change"),
+                        )
+                    elif msg_type == _WsType.ACTION.value:
+                        self.__on_action(message.get("name"), message.get("payload"))
+                    elif msg_type == _WsType.DATA_UPDATE.value:
+                        self.__request_data_update(str(message.get("name")), message.get("payload"))
+                    elif msg_type == _WsType.REQUEST_UPDATE.value:
+                        self.__request_var_update(message.get("payload"))
+                    elif msg_type == _WsType.GET_MODULE_CONTEXT.value:
+                        self.__handle_ws_get_module_context(payload)
+                    elif msg_type == _WsType.GET_DATA_TREE.value:
+                        self.__handle_ws_get_data_tree()
+                    elif msg_type == _WsType.APP_ID.value:
+                        self.__handle_ws_app_id(message)
+                self.__send_ack(message.get("ack_id"))
         except Exception as e:  # pragma: no cover
-            _warn(f"Decoding Message has failed: {message}", e)
+            if isinstance(e, AttributeError) and (name := message.get("name")):
+                try:
+                    names = self._get_real_var_name(name)
+                    var_name = names[0] if isinstance(names, tuple) else names
+                    var_context = names[1] if isinstance(names, tuple) else None
+                    if var_name.startswith("tpec_"):
+                        var_name = var_name[5:]
+                    if var_name.startswith("TpExPr_"):
+                        var_name = var_name[7:]
+                    _warn(
+                        f"A problem occurred while resolving variable '{var_name}'"
+                        + (f" in module '{var_context}'." if var_context else ".")
+                    )
+                except Exception as e1:
+                    _warn(f"Resolving  name '{name}' failed", e1)
+            else:
+                _warn(f"Decoding Message has failed: {message}", e)
 
     def __front_end_update(
         self,
@@ -708,7 +745,8 @@ class Gui:
             return f"{var_name_decode}.{suffix_var_name}" if suffix_var_name else var_name_decode, module_name
         if module_name == current_context:
             var_name = var_name_decode
-        else:
+        # only strict checking for cross-context linked variable when the context has been properly set
+        elif self._has_set_context():
             if var_name not in self.__var_dir._var_head:
                 raise NameError(f"Can't find matching variable for {var_name} on context: {current_context}")
             _found = False
@@ -864,7 +902,7 @@ class Gui:
                     elts.append(elt_dict)
         status.update({"libraries": libraries})
 
-    def _serve_status(self, template: pathlib.Path) -> t.Dict[str, t.Dict[str, str]]:
+    def _serve_status(self, template: Path) -> t.Dict[str, t.Dict[str, str]]:
         base_json: t.Dict[str, t.Any] = {"user_status": str(self.__call_on_status() or "")}
         if self._get_config("extended_status", False):
             base_json.update(
@@ -908,7 +946,7 @@ class Gui:
                 suffix = f".part.{part}"
                 complete = part == total - 1
         if file:  # and allowed_file(file.filename)
-            upload_path = pathlib.Path(self._get_config("upload_folder", tempfile.gettempdir())).resolve()
+            upload_path = Path(self._get_config("upload_folder", tempfile.gettempdir())).resolve()
             file_path = _get_non_existent_file_path(upload_path, secure_filename(file.filename))
             file.save(str(upload_path / (file_path.name + suffix)))
             if complete:
@@ -916,8 +954,11 @@ class Gui:
                     try:
                         with open(file_path, "wb") as grouped_file:
                             for nb in range(part + 1):
-                                with open(upload_path / f"{file_path.name}.part.{nb}", "rb") as part_file:
+                                part_file_path = upload_path / f"{file_path.name}.part.{nb}"
+                                with open(part_file_path, "rb") as part_file:
                                     grouped_file.write(part_file.read())
+                                # remove file_path after it is merged
+                                part_file_path.unlink()
                     except EnvironmentError as ee:  # pragma: no cover
                         _warn("Cannot group file after chunk upload", ee)
                         return
@@ -978,7 +1019,16 @@ class Gui:
                 elif isinstance(newvalue, _TaipyToJson):
                     newvalue = newvalue.get()
                 if isinstance(newvalue, (dict, _MapDict)):
-                    continue  # this var has no transformer
+                    # Skip in taipy-gui, available in custom frontend
+                    resource_handler_id = None
+                    with contextlib.suppress(Exception):
+                        if has_request_context():
+                            resource_handler_id = request.cookies.get(_Server._RESOURCE_HANDLER_ARG, None)
+                    if resource_handler_id is None:
+                        continue  # this var has no transformer
+                if isinstance(newvalue, float) and math.isnan(newvalue):
+                    # do not let NaN go through json, it is not handle well (dies silently through websocket)
+                    newvalue = None
                 debug_warnings: t.List[warnings.WarningMessage] = []
                 with warnings.catch_warnings(record=True) as warns:
                     warnings.resetwarnings()
@@ -1053,20 +1103,9 @@ class Gui:
                     }
                 )
 
-    def __handle_ws_get_variables(self):
-        # Get Variables
-        self.__pre_render_pages()
+    def __get_variable_tree(self, data: t.Dict[str, t.Any]):
         # Module Context -> Variable -> Variable data (name, type, initial_value)
         variable_tree: t.Dict[str, t.Dict[str, t.Dict[str, t.Any]]] = {}
-        data = vars(self._bindings()._get_data_scope())
-        data = {
-            k: v
-            for k, v in data.items()
-            if not k.startswith("_")
-            and not callable(v)
-            and "TpExPr" not in k
-            and not isinstance(v, (ModuleType, FunctionType, LambdaType, type, Page))
-        }
         for k, v in data.items():
             if isinstance(v, _TaipyBase):
                 data[k] = v.get()
@@ -1080,10 +1119,46 @@ class Gui:
                 "value": data[k],
                 "encoded_name": k,
             }
+        return variable_tree
+
+    def __handle_ws_get_data_tree(self):
+        # Get Variables
+        self.__pre_render_pages()
+        data = {
+            k: v
+            for k, v in vars(self._get_data_scope()).items()
+            if not k.startswith("_")
+            and not callable(v)
+            and "TpExPr" not in k
+            and not isinstance(v, (ModuleType, FunctionType, LambdaType, type, Page))
+        }
+        function_data = {
+            k: v
+            for k, v in vars(self._get_data_scope()).items()
+            if not k.startswith("_") and "TpExPr" not in k and isinstance(v, (FunctionType, LambdaType))
+        }
         self.__send_ws(
             {
-                "type": _WsType.GET_VARIABLES.value,
-                "payload": {"data": variable_tree},
+                "type": _WsType.GET_DATA_TREE.value,
+                "payload": {
+                    "variable": self.__get_variable_tree(data),
+                    "function": self.__get_variable_tree(function_data),
+                },
+            }
+        )
+
+    def __handle_ws_app_id(self, message: t.Any):
+        if not isinstance(message, dict):
+            return
+        name = message.get("name", "")
+        payload = message.get("payload", "")
+        app_id = id(self)
+        if payload == app_id:
+            return
+        self.__send_ws(
+            {
+                "type": _WsType.APP_ID.value,
+                "payload": {"name": name, "id": app_id},
             }
         )
 
@@ -1105,11 +1180,7 @@ class Gui:
     def __broadcast_ws(self, payload: dict, client_id: t.Optional[str] = None):
         try:
             to = list(self.__get_sids(client_id)) if client_id else []
-            self._server._ws.emit(
-                "message",
-                payload,
-                to=to if to else None
-            )
+            self._server._ws.emit("message", payload, to=to if to else None)
             time.sleep(0.001)
         except Exception as e:  # pragma: no cover
             _warn(f"Exception raised in WebSocket communication in '{self.__frame.f_code.co_name}'", e)
@@ -1181,7 +1252,7 @@ class Gui:
 
     def __send_ws_update_with_dict(self, modified_values: dict) -> None:
         payload = [
-            {"name": _get_client_var_name(k), "payload": (v if isinstance(v, dict) and "value" in v else {"value": v})}
+            {"name": _get_client_var_name(k), "payload": v if isinstance(v, dict) and "value" in v else {"value": v}}
             for k, v in modified_values.items()
         ]
         if self._is_broadcasting():
@@ -1256,6 +1327,31 @@ class Gui:
             cls = self.__locals_context.get_default().get(class_name)
         return cls if isinstance(cls, class_type) else class_name
 
+    def __download_csv(self, state: State, var_name: str, payload: dict):
+        holder_name = t.cast(str, payload.get("var_name"))
+        ret = self._accessors._get_data(
+            self,
+            holder_name,
+            _getscopeattr(self, holder_name, None),
+            {"alldata": True, "csv": True},
+        )
+        if isinstance(ret, dict):
+            df = ret.get("df")
+            try:
+                fd, temp_path = mkstemp(".csv", var_name, text=True)
+                with os.fdopen(fd, "wt", newline="") as csv_file:
+                    df.to_csv(csv_file, index=False)  # type:ignore
+                self._download(temp_path, "data.csv", Gui.__DOWNLOAD_DELETE_ACTION)
+            except Exception as e:  # pragma: no cover
+                if not self._call_on_exception("download_csv", e):
+                    _warn("download_csv(): Exception raised", e)
+
+    def __delete_csv(self, state: State, var_name: str, payload: dict):
+        try:
+            (Path(tempfile.gettempdir()) / t.cast(str, payload.get("args", [])[-1]).split("/")[-1]).unlink(True)
+        except Exception:
+            pass
+
     def __on_action(self, id: t.Optional[str], payload: t.Any) -> None:
         if isinstance(payload, dict):
             action = payload.get("action")
@@ -1263,7 +1359,15 @@ class Gui:
             action = str(payload)
             payload = {"action": action}
         if action:
-            if self.__call_function_with_args(action_function=self._get_user_function(action), id=id, payload=payload):
+            action_fn: t.Union[t.Callable, str]
+            if Gui.__DOWNLOAD_ACTION == action:
+                action_fn = self.__download_csv
+                payload["var_name"] = id
+            elif Gui.__DOWNLOAD_DELETE_ACTION == action:
+                action_fn = self.__delete_csv
+            else:
+                action_fn = self._get_user_function(action)
+            if self.__call_function_with_args(action_function=action_fn, id=id, payload=payload):
                 return
             else:  # pragma: no cover
                 _warn(f"on_action(): '{action}' is not a valid function.")
@@ -1312,16 +1416,29 @@ class Gui:
         return self._set_locals_context(module_context) if module_context is not None else contextlib.nullcontext()
 
     def _call_user_callback(
-        self, state_id: t.Optional[str], user_callback: t.Callable, args: t.List[t.Any], module_context: t.Optional[str]
+        self,
+        state_id: t.Optional[str],
+        user_callback: t.Union[t.Callable, str],
+        args: t.List[t.Any],
+        module_context: t.Optional[str],
     ) -> t.Any:
         try:
             with self.get_flask_app().app_context():
                 self.__set_client_id_in_context(state_id)
                 with self._set_module_context(module_context):
+                    if not callable(user_callback):
+                        user_callback = self._get_user_function(user_callback)
+                    if not callable(user_callback):
+                        _warn(f"invoke_callback(): {user_callback} is not callable.")
+                        return None
                     return self._call_function_with_state(user_callback, args)
         except Exception as e:  # pragma: no cover
-            if not self._call_on_exception(user_callback.__name__, e):
-                _warn(f"invoke_callback(): Exception raised in '{user_callback.__name__}()'", e)
+            if not self._call_on_exception(user_callback.__name__ if callable(user_callback) else user_callback, e):
+                _warn(
+                    "invoke_callback(): Exception raised in "
+                    + f"'{user_callback.__name__ if callable(user_callback) else user_callback}()'",
+                    e,
+                )
         return None
 
     def _call_broadcast_callback(
@@ -1384,6 +1501,9 @@ class Gui:
         hashes: t.Dict[str, str] = json.loads(unquote(hash_json))
         attributes.update({k: args_dict.get(v) for k, v in hashes.items()})
         return attributes, hashes
+
+    def _compare_data(self, *data):
+        return data[0]
 
     def _tbl_cols(
         self, rebuild: bool, rebuild_val: t.Optional[bool], attr_json: str, hash_json: str, **kwargs
@@ -1507,6 +1627,9 @@ class Gui:
     def _set_locals_context(self, context: t.Optional[str]) -> t.ContextManager[None]:
         return self.__locals_context.set_locals_context(context)
 
+    def _has_set_context(self):
+        return self.__locals_context.get_context() is not None
+
     def _get_page_context(self, page_name: str) -> str | None:
         if page_name not in self._config.routes:
             return None
@@ -1603,6 +1726,10 @@ class Gui:
         # Update variable directory
         if not page._is_class_module():
             self.__var_dir.add_frame(page._frame)
+        # Special case needed for page to access gui to trigger reload in notebook
+        if _is_in_notebook():
+            page._notebook_gui = self
+            page._notebook_page = new_page
 
     def add_pages(self, pages: t.Optional[t.Union[t.Mapping[str, t.Union[str, Page]], str]] = None) -> None:
         """Add several pages to the Graphical User Interface.
@@ -1834,7 +1961,7 @@ class Gui:
             else:
                 _warn("download() on_action is invalid.")
         content_str = self._get_content("Gui.download", content, False)
-        self.__send_ws_download(content_str, str(name), str(on_action))
+        self.__send_ws_download(content_str, str(name), str(on_action) if on_action is not None else "")
 
     def _notify(
         self,
@@ -1914,7 +2041,7 @@ class Gui:
     def _call_on_exception(self, function_name: str, exception: Exception) -> bool:
         if hasattr(self, "on_exception") and callable(self.on_exception):
             try:
-                self.on_exception(self.__get_state(), str(function_name), exception)
+                self.on_exception(self.__get_state(), function_name, exception)
             except Exception as e:  # pragma: no cover
                 _warn("Exception raised in on_exception()", e)
             return True
@@ -1932,13 +2059,17 @@ class Gui:
     def __pre_render_pages(self) -> None:
         """Pre-render all pages to have a proper initialization of all variables"""
         self.__set_client_id_in_context()
+        scope_metadata = self._get_data_scope_metadata()
+        if scope_metadata[_DataScopes._META_PRE_RENDER]:
+            return
         for page in self._config.pages:
             if page is not None:
                 with contextlib.suppress(Exception):
                     if isinstance(page._renderer, CustomPage):
                         self._bind_custom_page_variables(page._renderer, self._get_client_id())
                     else:
-                        page.render(self)
+                        page.render(self, silent=True)
+        scope_metadata[_DataScopes._META_PRE_RENDER] = True
 
     def _get_navigated_page(self, page_name: str) -> t.Any:
         nav_page = page_name
@@ -1968,7 +2099,7 @@ class Gui:
 
     def _bind_custom_page_variables(self, page: CustomPage, client_id: t.Optional[str]):
         """Handle the bindings of custom page variables"""
-        with self.get_flask_app().app_context() if has_app_context() else contextlib.nullcontext():
+        with self.get_flask_app().app_context() if has_app_context() else contextlib.nullcontext():  # type: ignore[attr-defined]
             self.__set_client_id_in_context(client_id)
             with self._set_locals_context(page._get_module_name()):
                 for k in self._get_locals_bind().keys():
@@ -1997,6 +2128,7 @@ class Gui:
                 to=page_name,
                 params={
                     _Server._RESOURCE_HANDLER_ARG: pr._resource_handler.get_id(),
+                    _Server._CUSTOM_PAGE_META_ARG: json.dumps(pr._metadata, cls=_TaipyJsonEncoder),
                 },
             ):
                 # Proactively handle the bindings of custom page variables
@@ -2052,7 +2184,7 @@ class Gui:
 
     def _set_css_file(self, css_file: t.Optional[str] = None):
         if css_file is None:
-            script_file = pathlib.Path(self.__frame.f_code.co_filename or ".").resolve()
+            script_file = Path(self.__frame.f_code.co_filename or ".").resolve()
             if script_file.with_suffix(".css").exists():
                 css_file = f"{script_file.stem}.css"
             elif script_file.is_dir() and (script_file / "taipy.css").exists():
@@ -2062,6 +2194,21 @@ class Gui:
     def _set_state(self, state: State):
         if isinstance(state, State):
             self.__state = state
+
+    def _get_webapp_path(self):
+        _conf_webapp_path = (
+            Path(self._get_config("webapp_path", None)) if self._get_config("webapp_path", None) else None
+        )
+        _webapp_path = str((Path(__file__).parent / "webapp").resolve())
+        if _conf_webapp_path:
+            if _conf_webapp_path.is_dir():
+                _webapp_path = str(_conf_webapp_path.resolve())
+                _warn(f"Using webapp_path: '{_conf_webapp_path}'.")
+            else:  # pragma: no cover
+                _warn(
+                    f"webapp_path: '{_conf_webapp_path}' is not a valid directory. Falling back to '{_webapp_path}'."  # noqa: E501
+                )
+        return _webapp_path
 
     def __get_client_config(self) -> t.Dict[str, t.Any]:
         config = {
@@ -2184,24 +2331,13 @@ class Gui:
         if self._get_config("stylekit", True):
             styles.append("stylekit/stylekit.css")
         else:
-            styles.append("https://fonts.googleapis.com/css?family=Roboto:300,400,500,700&display=swap")
+            styles.append(Gui.__ROBOTO_FONT)
         if self.__css_file:
             styles.append(f"/{self.__css_file}")
 
         self._flask_blueprint.append(extension_bp)
 
-        _conf_webapp_path = (
-            pathlib.Path(self._get_config("webapp_path", None)) if self._get_config("webapp_path", None) else None
-        )
-        _webapp_path = str((pathlib.Path(__file__).parent / "webapp").resolve())
-        if _conf_webapp_path:
-            if _conf_webapp_path.is_dir():
-                _webapp_path = str(_conf_webapp_path.resolve())
-                _warn(f"Using webapp_path: '{_conf_webapp_path}'.")
-            else:  # pragma: no cover
-                _warn(
-                    f"webapp_path: '{_conf_webapp_path}' is not a valid directory path. Falling back to '{_webapp_path}'."  # noqa: E501
-                )
+        _webapp_path = self._get_webapp_path()
 
         self._flask_blueprint.append(
             self._server._get_default_blueprint(
@@ -2415,3 +2551,6 @@ class Gui:
         if hasattr(self, "_server") and hasattr(self._server, "_thread") and self._server._is_running:
             self._server.stop_thread()
             _TaipyLogger._get_logger().info("Gui server has been stopped.")
+
+    def _get_autorization(self, client_id: t.Optional[str] = None, system: t.Optional[bool] = False):
+        return contextlib.nullcontext()

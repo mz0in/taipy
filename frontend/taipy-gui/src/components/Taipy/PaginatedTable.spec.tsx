@@ -94,6 +94,20 @@ const tableColumns = JSON.stringify({
     Entity: { dfid: "Entity" },
     "Daily hospital occupancy": { dfid: "Daily hospital occupancy", type: "int64" },
 });
+const changedValue = {
+    [valueKey]: {
+        data: [
+            {
+                Day_str: "2020-04-01T00:00:00.000000Z",
+                "Daily hospital occupancy": 856,
+                Entity: "Australia",
+                Code: "AUS",
+            },
+        ],
+        rowcount: 1,
+        start: 0,
+    },
+};
 
 const editableValue = {
     "0--1-bool,int,float,Code--asc": {
@@ -116,6 +130,33 @@ const editableValue = {
     },
 };
 const editableColumns = JSON.stringify({
+    bool: { dfid: "bool", type: "bool", index: 0 },
+    int: { dfid: "int", type: "int", index: 1 },
+    float: { dfid: "float", type: "float", index: 2 },
+    Code: { dfid: "Code", type: "str", index: 3 },
+});
+
+const buttonValue = {
+    "0--1-bool,int,float,Code--asc": {
+        data: [
+            {
+                bool: true,
+                int: 856,
+                float: 1.5,
+                Code: "[Button Label](button action)",
+            },
+            {
+                bool: false,
+                int: 823,
+                float: 2.5,
+                Code: "ZZZ",
+            },
+        ],
+        rowcount: 2,
+        start: 0,
+    },
+};
+const buttonColumns = JSON.stringify({
     bool: { dfid: "bool", type: "bool", index: 0 },
     int: { dfid: "int", type: "int", index: 1 },
     float: { dfid: "float", type: "float", index: 2 },
@@ -282,6 +323,30 @@ describe("PaginatedTable Component", () => {
         expect(elts.length).toBeGreaterThan(1);
         expect(elts[0].tagName).toBe("SPAN");
     });
+    it("displays the refreshed data", async () => {
+        const dispatch = jest.fn();
+        const state: TaipyState = INITIAL_STATE;
+        const { getAllByText, rerender, queryByText } = render(
+            <TaipyContext.Provider value={{ state, dispatch }}>
+                <PaginatedTable data={undefined} defaultColumns={tableColumns} />
+            </TaipyContext.Provider>
+        );
+
+        rerender(
+            <TaipyContext.Provider value={{ state, dispatch }}>
+                <PaginatedTable data={tableValue as TableValueType} defaultColumns={tableColumns} />
+            </TaipyContext.Provider>
+        );
+        expect(getAllByText("Austria").length).toBeGreaterThan(1)
+
+        rerender(
+            <TaipyContext.Provider value={{ state, dispatch }}>
+                <PaginatedTable data={changedValue as TableValueType} defaultColumns={tableColumns} />
+            </TaipyContext.Provider>
+        );
+        expect(queryByText("Austria")).toBeNull();
+        expect(getAllByText("Australia").length).toBe(1);
+    });
     it("selects the rows", async () => {
         const dispatch = jest.fn();
         const state: TaipyState = INITIAL_STATE;
@@ -299,8 +364,8 @@ describe("PaginatedTable Component", () => {
         const elts = await waitFor(() => findAllByText("Austria"));
         elts.forEach((elt: HTMLElement, idx: number) =>
             selected.indexOf(idx) == -1
-                ? expect(elt.parentElement?.parentElement?.parentElement).not.toHaveClass("Mui-selected")
-                : expect(elt.parentElement?.parentElement?.parentElement).toHaveClass("Mui-selected")
+                ? expect(elt.parentElement?.parentElement?.parentElement?.parentElement).not.toHaveClass("Mui-selected")
+                : expect(elt.parentElement?.parentElement?.parentElement?.parentElement).toHaveClass("Mui-selected")
         );
         expect(document.querySelectorAll(".Mui-selected")).toHaveLength(selected.length);
     });
@@ -539,6 +604,45 @@ describe("PaginatedTable Component", () => {
                 args: [],
                 col: "int",
                 index: 1,
+                reason: "click",
+                value: undefined
+            },
+            type: "SEND_ACTION_ACTION",
+        });
+    });
+    it("can click on button", async () => {
+        const dispatch = jest.fn();
+        const state: TaipyState = INITIAL_STATE;
+        const { getByText, rerender } = render(
+            <TaipyContext.Provider value={{ state, dispatch }}>
+                <PaginatedTable data={undefined} defaultColumns={editableColumns} showAll={true} onAction="onSelect" />
+            </TaipyContext.Provider>
+        );
+
+        rerender(
+            <TaipyContext.Provider value={{ state: { ...state }, dispatch }}>
+                <PaginatedTable
+                    data={buttonValue as TableValueType}
+                    defaultColumns={buttonColumns}
+                    showAll={true}
+                    onAction="onSelect"
+                />
+            </TaipyContext.Provider>
+        );
+
+        dispatch.mockClear();
+        const elt = getByText("Button Label");
+        expect(elt.tagName).toBe("BUTTON");
+        await userEvent.click(elt);
+        expect(dispatch).toHaveBeenCalledWith({
+            name: "",
+            payload: {
+                action: "onSelect",
+                args: [],
+                col: "Code",
+                index: 0,
+                reason: "button",
+                value: "button action"
             },
             type: "SEND_ACTION_ACTION",
         });

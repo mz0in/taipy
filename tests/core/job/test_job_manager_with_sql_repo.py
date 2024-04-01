@@ -14,13 +14,14 @@ import random
 import string
 from functools import partial
 from time import sleep
+from typing import cast
 
 import pytest
 
 from taipy.config.common.scope import Scope
 from taipy.config.config import Config
 from taipy.core import Task
-from taipy.core._orchestrator._dispatcher._job_dispatcher import _JobDispatcher
+from taipy.core._orchestrator._dispatcher import _StandaloneJobDispatcher
 from taipy.core._orchestrator._orchestrator_factory import _OrchestratorFactory
 from taipy.core.config.job_config import JobConfig
 from taipy.core.data import InMemoryDataNode
@@ -28,11 +29,9 @@ from taipy.core.data._data_manager import _DataManager
 from taipy.core.data._data_manager_factory import _DataManagerFactory
 from taipy.core.exceptions.exceptions import JobNotDeletedException
 from taipy.core.job._job_manager import _JobManager
-from taipy.core.job._job_manager_factory import _JobManagerFactory
 from taipy.core.job.job_id import JobId
 from taipy.core.job.status import Status
 from taipy.core.task._task_manager import _TaskManager
-from taipy.core.task._task_manager_factory import _TaskManagerFactory
 from tests.core.utils import assert_true_after_time
 
 
@@ -45,19 +44,10 @@ def lock_multiply(lock, nb1: float, nb2: float):
         return multiply(nb1 or 1, nb2 or 2)
 
 
-def init_managers():
-    _TaskManagerFactory._build_manager()._delete_all()
-    _DataManagerFactory._build_manager()._delete_all()
-    _JobManagerFactory._build_manager()._delete_all()
-
-
 def test_create_jobs(init_sql_repo):
     Config.configure_job_executions(mode=JobConfig._DEVELOPMENT_MODE)
-    init_managers()
 
     task = _create_task(multiply, name="get_job")
-
-    _OrchestratorFactory._build_dispatcher()
 
     job_1 = _JobManager._create(task, [print], "submit_id", "secnario_id", True)
     assert _JobManager._get(job_1.id) == job_1
@@ -80,11 +70,8 @@ def test_create_jobs(init_sql_repo):
 
 def test_get_job(init_sql_repo):
     Config.configure_job_executions(mode=JobConfig._DEVELOPMENT_MODE)
-    init_managers()
 
     task = _create_task(multiply, name="get_job")
-
-    _OrchestratorFactory._build_dispatcher()
 
     job_1 = _OrchestratorFactory._orchestrator.submit_task(task).jobs[0]
     assert _JobManager._get(job_1.id) == job_1
@@ -99,12 +86,9 @@ def test_get_job(init_sql_repo):
 
 def test_get_latest_job(init_sql_repo):
     Config.configure_job_executions(mode=JobConfig._DEVELOPMENT_MODE)
-    init_managers()
 
     task = _create_task(multiply, name="get_latest_job")
     task_2 = _create_task(multiply, name="get_latest_job_2")
-
-    _OrchestratorFactory._build_dispatcher()
 
     job_1 = _OrchestratorFactory._orchestrator.submit_task(task).jobs[0]
     assert _JobManager._get_latest(task) == job_1
@@ -122,17 +106,13 @@ def test_get_latest_job(init_sql_repo):
 
 
 def test_get_job_unknown(init_sql_repo):
-    init_managers()
     assert _JobManager._get(JobId("Unknown")) is None
 
 
 def test_get_jobs(init_sql_repo):
     Config.configure_job_executions(mode=JobConfig._DEVELOPMENT_MODE)
-    init_managers()
 
     task = _create_task(multiply, name="get_all_jobs")
-
-    _OrchestratorFactory._build_dispatcher()
 
     job_1 = _OrchestratorFactory._orchestrator.submit_task(task).jobs[0]
     job_2 = _OrchestratorFactory._orchestrator.submit_task(task).jobs[0]
@@ -143,11 +123,7 @@ def test_get_jobs(init_sql_repo):
 def test_delete_job(init_sql_repo):
     Config.configure_job_executions(mode=JobConfig._DEVELOPMENT_MODE)
 
-    init_managers()
-
     task = _create_task(multiply, name="delete_job")
-
-    _OrchestratorFactory._build_dispatcher()
 
     job_1 = _OrchestratorFactory._orchestrator.submit_task(task).jobs[0]
     job_2 = _OrchestratorFactory._orchestrator.submit_task(task).jobs[0]
@@ -159,11 +135,8 @@ def test_delete_job(init_sql_repo):
 
 
 def test_raise_when_trying_to_delete_unfinished_job(init_sql_repo):
-    Config.configure_job_executions(mode=JobConfig._STANDALONE_MODE, max_nb_of_workers=2)
-    init_managers()
+    Config.configure_job_executions(mode=JobConfig._STANDALONE_MODE, max_nb_of_workers=3)
 
-    m = multiprocessing.Manager()
-    lock = m.Lock()
     dnm = _DataManagerFactory._build_manager()
     dn_1 = InMemoryDataNode("dn_config_1", Scope.SCENARIO, properties={"default_data": 1})
     dnm._set(dn_1)
@@ -171,14 +144,15 @@ def test_raise_when_trying_to_delete_unfinished_job(init_sql_repo):
     dnm._set(dn_2)
     dn_3 = InMemoryDataNode("dn_config_3", Scope.SCENARIO)
     dnm._set(dn_3)
+    proc_manager = multiprocessing.Manager()
+    lock = proc_manager.Lock()
     task = Task("task_cfg", {}, partial(lock_multiply, lock), [dn_1, dn_2], [dn_3], id="raise_when_delete_unfinished")
-    _OrchestratorFactory._build_dispatcher()
+    dispatcher = cast(_StandaloneJobDispatcher, _OrchestratorFactory._build_dispatcher(force_restart=True))
 
     with lock:
         job = _OrchestratorFactory._orchestrator.submit_task(task)._jobs[0]
-
-        assert_true_after_time(lambda: len(_JobDispatcher._dispatched_processes) == 1)
         assert_true_after_time(job.is_running)
+        assert dispatcher._nb_available_workers == 2
         with pytest.raises(JobNotDeletedException):
             _JobManager._delete(job)
         with pytest.raises(JobNotDeletedException):
@@ -189,7 +163,6 @@ def test_raise_when_trying_to_delete_unfinished_job(init_sql_repo):
 
 def test_force_deleting_unfinished_job(init_sql_repo):
     Config.configure_job_executions(mode=JobConfig._STANDALONE_MODE, max_nb_of_workers=2)
-    init_managers()
 
     m = multiprocessing.Manager()
     lock = m.Lock()
@@ -205,7 +178,6 @@ def test_force_deleting_unfinished_job(init_sql_repo):
     )
     reference_last_edit_date = dn_3.last_edit_date
     _OrchestratorFactory._build_dispatcher()
-
     with lock:
         job = _OrchestratorFactory._orchestrator.submit_task(task_1)._jobs[0]
         assert_true_after_time(job.is_running)
@@ -217,8 +189,6 @@ def test_force_deleting_unfinished_job(init_sql_repo):
 
 
 def test_is_deletable(init_sql_repo):
-    init_managers()
-
     assert len(_JobManager._get_all()) == 0
     task = _create_task(print, 0, "task")
     job = _OrchestratorFactory._orchestrator.submit_task(task).jobs[0]
@@ -274,7 +244,7 @@ def _create_task(function, nb_outputs=1, name=None):
     output_dn_configs = [
         Config.configure_data_node(f"output{i}", scope=Scope.SCENARIO, default_data=0) for i in range(nb_outputs)
     ]
-    _DataManager._bulk_get_or_create({cfg for cfg in output_dn_configs})
+    _DataManager._bulk_get_or_create(output_dn_configs)
     name = name or "".join(random.choice(string.ascii_lowercase) for _ in range(10))
     task_config = Config.configure_task(
         id=name,

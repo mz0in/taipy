@@ -16,15 +16,14 @@ from typing import Any, List, Optional, Set
 
 from taipy.config.common.scope import Scope
 
-from .._backup._backup import _replace_in_backup_file
 from .._entity._reload import _self_reload
 from .._version._version_manager_factory import _VersionManagerFactory
-from ._abstract_file import _AbstractFileDataNode
+from ._abstract_file import _FileDataNodeMixin
 from .data_node import DataNode
 from .data_node_id import DataNodeId, Edit
 
 
-class PickleDataNode(DataNode, _AbstractFileDataNode):
+class PickleDataNode(DataNode, _FileDataNodeMixin):
     """Data Node stored as a pickle file.
 
     Attributes:
@@ -102,10 +101,12 @@ class PickleDataNode(DataNode, _AbstractFileDataNode):
             editor_expiration_date,
             **properties,
         )
+        if self._path and ".data" in self._path:
+            self._path = self._migrate_path(self.storage_type(), self._path)
+
         if self._path is None:
             self._path = self._build_path(self.storage_type())
-        if not self._last_edit_date and os.path.exists(self._path):
-            self._last_edit_date = datetime.now()
+
         if default_value is not None and not os.path.exists(self._path):
             self._write(default_value)
             self._last_edit_date = datetime.now()
@@ -118,6 +119,8 @@ class PickleDataNode(DataNode, _AbstractFileDataNode):
                     }
                 )
             )
+        if not self._last_edit_date and os.path.exists(self._path):
+            self._last_edit_date = datetime.now()
 
         self._TAIPY_PROPERTIES.update(
             {
@@ -139,11 +142,9 @@ class PickleDataNode(DataNode, _AbstractFileDataNode):
 
     @path.setter
     def path(self, value):
-        tmp_old_path = self._path
         self._path = value
         self.properties[self.__PATH_KEY] = value
         self.properties[self.__IS_GENERATED_KEY] = False
-        _replace_in_backup_file(old_file_path=tmp_old_path, new_file_path=self._path)
 
     @property  # type: ignore
     @_self_reload(DataNode._MANAGER_NAME)

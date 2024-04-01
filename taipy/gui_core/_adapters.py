@@ -59,8 +59,7 @@ class _GuiCoreScenarioAdapter(_TaipyBase):
         data = super().get()
         if isinstance(data, Scenario):
             try:
-                scenario = core_get(data.id)
-                if scenario:
+                if scenario := core_get(data.id):
                     return [
                         scenario.id,
                         scenario.is_primary,
@@ -77,11 +76,19 @@ class _GuiCoreScenarioAdapter(_TaipyBase):
                         if scenario.properties
                         else [],
                         [
-                            (p.id, p.get_simple_label(), is_submittable(p), is_editable(p))
-                            for p in scenario.sequences.values()
+                            (
+                                s.get_simple_label(),
+                                [t.id for t in s.tasks.values()] if hasattr(s, "tasks") else [],
+                                is_submittable(s),
+                                is_editable(s),
+                            )
+                            for s in scenario.sequences.values()
                         ]
                         if hasattr(scenario, "sequences") and scenario.sequences
                         else [],
+                        {t.id: t.get_simple_label() for t in scenario.tasks.values()}
+                        if hasattr(scenario, "tasks")
+                        else {},
                         list(scenario.properties.get("authorized_tags", [])) if scenario.properties else [],
                         is_deletable(scenario),
                         is_promotable(scenario),
@@ -108,15 +115,14 @@ class _GuiCoreScenarioDagAdapter(_TaipyBase):
         data = super().get()
         if isinstance(data, Scenario):
             try:
-                scenario = core_get(data.id)
-                if scenario:
-                    dag = data._get_dag()
-                    nodes = dict()
+                if scenario := core_get(data.id):
+                    dag = scenario._get_dag()
+                    nodes = {}
                     for id, node in dag.nodes.items():
                         entityType = _GuiCoreScenarioDagAdapter.get_entity_type(node)
                         cat = nodes.get(entityType)
                         if cat is None:
-                            cat = dict()
+                            cat = {}
                             nodes[entityType] = cat
                         cat[id] = {
                             "name": node.entity.get_simple_label(),
@@ -158,8 +164,7 @@ class _GuiCoreDatanodeAdapter(_TaipyBase):
         data = super().get()
         if isinstance(data, DataNode):
             try:
-                datanode = core_get(data.id)
-                if datanode:
+                if datanode := core_get(data.id):
                     owner = core_get(datanode.owner_id) if datanode.owner_id else None
                     return [
                         datanode.id,

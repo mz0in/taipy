@@ -39,7 +39,9 @@ class _Bindings:
 
     def __get_property(self, name):
         def __setter(ud: _Bindings, value: t.Any):
-            if isinstance(value, dict):
+            if isinstance(value, _MapDict):
+                value._update_var = None
+            elif isinstance(value, dict):
                 value = _MapDict(value, None)
             ud.__gui._update_var(name, value)
 
@@ -70,7 +72,10 @@ class _Bindings:
         self.__scopes = _DataScopes()
 
     def _get_data_scope(self):
-        return self.__scopes.get_scope(self.__gui._get_client_id())
+        return self.__scopes.get_scope(self.__gui._get_client_id())[0]
+
+    def _get_data_scope_metadata(self):
+        return self.__scopes.get_scope(self.__gui._get_client_id())[1]
 
     def _get_all_scopes(self):
         return self.__scopes.get_all_scopes()

@@ -48,22 +48,12 @@ extras_require = {
 
 class NPMInstall(build_py):
     def run(self):
-        with_shell = platform.system() == "Windows"
-        print(f"Building taipy frontend bundle in {root_folder}.")
-        already_exists = (root_folder / "taipy" / "gui_core" / "lib" / "taipy-gui-core.js").exists()
-        if already_exists:
-            print(f'Found taipy frontend bundle in {root_folder / "taipy" / "gui_core" / "lib"}.')
-        else:
-            # Specify the correct path to taipy-gui in gui/.env file
-            env_file_path = root_folder / "frontend" / "taipy" / ".env"
-            if not env_file_path.exists():
-                with open(env_file_path, "w") as env_file:
-                    env_file.write(f"TAIPY_DIR={root_folder}\n")
-            subprocess.run(["npm", "ci"], cwd=root_folder / "frontend" / "taipy", check=True, shell=with_shell)
-            subprocess.run(
-                ["npm", "run", "build"], cwd=root_folder / "frontend" / "taipy", check=True, shell=with_shell
-            )
-
+        subprocess.run(
+            ["python", "bundle_build.py"],
+            cwd=root_folder / "tools" / "frontend",
+            check=True,
+            shell=platform.system() == "Windows",
+        )
         build_py.run(self)
 
 
@@ -80,6 +70,7 @@ setup(
         "Programming Language :: Python :: 3.9",
         "Programming Language :: Python :: 3.10",
         "Programming Language :: Python :: 3.11",
+        "Programming Language :: Python :: 3.12",
     ],
     description="A 360° open-source platform from Python pilots to production-ready web apps.",
     install_requires=requirements,
@@ -93,7 +84,7 @@ setup(
     long_description_content_type="text/markdown",
     keywords="taipy",
     name="taipy",
-    packages=find_packages(include=["taipy", "taipy._cli", "taipy.gui_core"]),
+    packages=find_packages(include=["taipy", "taipy._cli", "taipy._cli.*", "taipy.gui_core"]),
     include_package_data=True,
     test_suite="tests",
     url="https://github.com/avaiga/taipy",

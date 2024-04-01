@@ -1,25 +1,38 @@
 const path = require("path");
 const webpack = require("webpack");
+const resolveApp = relativePath => path.resolve(__dirname, relativePath);
 
 const moduleName = "TaipyGuiBase";
+const basePath = "../../../taipy/gui/webapp";
+const webAppPath = resolveApp(basePath);
 
 module.exports = {
     target: "web",
-    entry: "./base/src/index.ts",
+    entry: {
+        "default": "./base/src/index.ts",
+        "preview": "./base/src/index-preview.ts",
+    },
     output: {
-        filename: "taipy-gui-base.js",
-        path: path.resolve(__dirname, "dist"),
+        filename: (arg) => {
+            if (arg.chunk.name === "default") {
+                return "taipy-gui-base.js";
+            }
+            return "[name].taipy-gui-base.js";
+        },
+        chunkFilename: "[name].taipy-gui-base.js",
+        path: webAppPath,
         globalObject: "this",
         library: {
             name: moduleName,
             type: "umd",
         },
     },
-    plugins: [
-        new webpack.optimize.LimitChunkCountPlugin({
-            maxChunks: 1,
-        }),
-    ],
+    optimization: {
+        splitChunks: {
+            chunks: 'all',
+            name: "shared",
+        },
+    },
     module: {
         rules: [
             {

@@ -11,7 +11,6 @@
 
 __all__ = ["Job"]
 
-import traceback
 from datetime import datetime
 from typing import TYPE_CHECKING, Any, Callable, List, Optional
 
@@ -33,6 +32,7 @@ if TYPE_CHECKING:
 def _run_callbacks(fn):
     def __run_callbacks(job):
         fn(job)
+        _TaipyLogger._get_logger().debug(f"{job.id} status has changed to {job.status}.")
         for fct in job._subscribers:
             fct(job)
 
@@ -200,6 +200,7 @@ class Job(_Entity, _Labeled):
     def completed(self):
         """Set the status to _completed_ and notify subscribers."""
         self.status = Status.COMPLETED
+        self.__logger.info(f"job {self.id} is completed.")
 
     @_run_callbacks
     def skipped(self):
@@ -287,7 +288,7 @@ class Job(_Entity, _Labeled):
         return self.is_completed() or self.is_failed() or self.is_canceled() or self.is_skipped() or self.is_abandoned()
 
     def _is_finished(self) -> bool:
-        """Indicate if the job is finished. This function will not triggered the persistency feature like is_finished().
+        """Indicate if the job is finished. This function will not trigger the persistence feature like is_finished().
 
         Returns:
             True if the job is finished.
@@ -308,24 +309,8 @@ class Job(_Entity, _Labeled):
         function = functions.pop()
         self._subscribers.append(function)
 
-        if self.status != Status.SUBMITTED:
-            function(self)
-
         if functions:
             self._on_status_change(*functions)
-
-    def update_status(self, exceptions):
-        """Update the job status based on the success or the failure of its execution."""
-        if exceptions:
-            self.failed()
-            self.__logger.error(f" {len(exceptions)} errors occurred during execution of job {self.id}")
-            for e in exceptions:
-                st = "".join(traceback.format_exception(type(e), value=e, tb=e.__traceback__))
-                self._stacktrace.append(st)
-                self.__logger.error(st)
-        else:
-            self.completed()
-            self.__logger.info(f"job {self.id} is completed.")
 
     def __hash__(self):
         return hash(self.id)

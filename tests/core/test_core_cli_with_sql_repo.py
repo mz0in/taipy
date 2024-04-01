@@ -27,7 +27,6 @@ from taipy.core.job._job_manager import _JobManager
 from taipy.core.scenario._scenario_manager import _ScenarioManager
 from taipy.core.sequence._sequence_manager import _SequenceManager
 from taipy.core.task._task_manager import _TaskManager
-from tests.core.utils import assert_true_after_time
 
 
 def test_core_cli_no_arguments(init_sql_repo):
@@ -98,9 +97,8 @@ def test_core_cli_production_mode(init_sql_repo):
         core.stop()
 
 
-def test_dev_mode_clean_all_entities_of_the_latest_version(init_sql_repo, init_managers):
+def test_dev_mode_clean_all_entities_of_the_latest_version(init_sql_repo):
     scenario_config = config_scenario()
-    init_managers()
 
     # Create a scenario in development mode
     with patch("sys.argv", ["prog"]):
@@ -302,9 +300,8 @@ def test_version_number_when_switching_mode(init_sql_repo):
         core.stop()
 
 
-def test_production_mode_load_all_entities_from_previous_production_version(init_sql_repo, init_managers):
+def test_production_mode_load_all_entities_from_previous_production_version(init_sql_repo):
     scenario_config = config_scenario()
-    init_managers()
 
     with patch("sys.argv", ["prog", "--development"]):
         core = Core()
@@ -353,9 +350,8 @@ def test_production_mode_load_all_entities_from_previous_production_version(init
         core.stop()
 
 
-def test_force_override_experiment_version(init_sql_repo, init_managers):
+def test_force_override_experiment_version(init_sql_repo):
     scenario_config = config_scenario()
-    init_managers()
 
     with patch("sys.argv", ["prog", "--experiment", "1.0"]):
         core = Core()
@@ -406,9 +402,8 @@ def test_force_override_experiment_version(init_sql_repo, init_managers):
     assert len(_JobManager._get_all()) == 2
 
 
-def test_force_override_production_version(init_sql_repo, init_managers):
+def test_force_override_production_version(init_sql_repo):
     scenario_config = config_scenario()
-    init_managers()
 
     with patch("sys.argv", ["prog", "--production", "1.0"]):
         core = Core()
@@ -461,40 +456,35 @@ def test_force_override_production_version(init_sql_repo, init_managers):
         core.stop()
 
 
-def test_modify_config_properties_without_force(caplog, init_sql_repo, init_config, init_managers):
-    scenario_config = config_scenario()
-    init_managers()
+def test_modify_config_properties_without_force(caplog, init_sql_repo, init_config):
+    _ = config_scenario()
 
     with patch("sys.argv", ["prog", "--experiment", "1.0"]):
         core = Core()
         core.run()
-        scenario = _ScenarioManager._create(scenario_config)
-        _ScenarioManager._submit(scenario)
         core.stop()
 
     init_config()
     Config.configure_core(repository_type="sql", repository_properties={"db_location": init_sql_repo})
 
-    scenario_config_2 = config_scenario_2()
+    _ = config_scenario_2()
 
     with pytest.raises(SystemExit):
         with patch("sys.argv", ["prog", "--experiment", "1.0"]):
             core = Core()
             core.run()
-            scenario = _ScenarioManager._create(scenario_config_2)
-            _ScenarioManager._submit(scenario)
     core.stop()
 
     error_message = str(caplog.text)
 
     assert 'DATA_NODE "d3" was added' in error_message
+    assert 'JOB "max_nb_of_workers" was added' in error_message
 
     assert 'DATA_NODE "d0" was removed' in error_message
 
     assert 'DATA_NODE "d2" has attribute "default_path" modified' in error_message
     assert 'CORE "root_folder" was modified' in error_message
     assert 'JOB "mode" was modified' in error_message
-    assert 'JOB "max_nb_of_workers" was modified' in error_message
     assert 'SCENARIO "my_scenario" has attribute "frequency" modified' in error_message
     assert 'SCENARIO "my_scenario" has attribute "tasks" modified' in error_message
     assert 'TASK "my_task" has attribute "inputs" modified' in error_message
@@ -504,37 +494,28 @@ def test_modify_config_properties_without_force(caplog, init_sql_repo, init_conf
     assert 'DATA_NODE "d2" has attribute "exposed_type" modified' in error_message
 
 
-def test_modify_job_configuration_dont_stop_application(caplog, init_sql_repo, init_config, init_managers):
-    scenario_config = config_scenario()
-    init_managers()
+def test_modify_job_configuration_dont_stop_application(caplog, init_sql_repo, init_config):
+    _ = config_scenario()
 
     with patch("sys.argv", ["prog", "--experiment", "1.0"]):
         Config.configure_job_executions(mode="development")
         core = Core()
         core.run(force_restart=True)
-        scenario = _ScenarioManager._create(scenario_config)
-        jobs = _ScenarioManager._submit(scenario).jobs
-        assert all(job.is_finished() for job in jobs)
         core.stop()
 
     init_config()
     Config.configure_core(repository_type="sql", repository_properties={"db_location": init_sql_repo})
 
-    scenario_config = config_scenario()
+    _ = config_scenario()
 
     with patch("sys.argv", ["prog", "--experiment", "1.0"]):
-        Config.configure_job_executions(mode="standalone", max_nb_of_workers=2)
+        Config.configure_job_executions(mode="standalone", max_nb_of_workers=3)
         core = Core()
         core.run(force_restart=True)
-        scenario = _ScenarioManager._create(scenario_config)
-
-        jobs = _ScenarioManager._submit(scenario).jobs
-        assert_true_after_time(lambda: all(job.is_finished() for job in jobs))
         error_message = str(caplog.text)
         assert 'JOB "mode" was modified' in error_message
-        assert 'JOB "max_nb_of_workers" was modified' in error_message
+        assert 'JOB "max_nb_of_workers" was added' in error_message
         core.stop()
-        assert_true_after_time(lambda: core._dispatcher is None)
 
 
 def twice(a):
@@ -564,7 +545,7 @@ def config_scenario_2():
         # Changing the "storage_folder" will fail since older versions are stored in older folder
         # storage_folder="foo_storage",
     )
-    Config.configure_job_executions(mode="standalone", max_nb_of_workers=5)
+    Config.configure_job_executions(mode="standalone", max_nb_of_workers=3)
     data_node_1_config = Config.configure_data_node(
         id="d1", storage_type="pickle", default_data="abc", scope=Scope.SCENARIO
     )

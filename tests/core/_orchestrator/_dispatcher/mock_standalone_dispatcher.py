@@ -10,7 +10,8 @@
 # specific language governing permissions and limitations under the License.
 
 from concurrent.futures import Executor, Future
-from typing import List, Optional
+from threading import Lock
+from typing import List
 
 from taipy.core import Job
 from taipy.core._orchestrator._abstract_orchestrator import _AbstractOrchestrator
@@ -35,13 +36,13 @@ class MockProcessPoolExecutor(Executor):
 
 
 class MockStandaloneDispatcher(_StandaloneJobDispatcher):
-    def __init__(self, orchestrator: Optional[_AbstractOrchestrator]):
+    def __init__(self, orchestrator: _AbstractOrchestrator):
         super(_StandaloneJobDispatcher, self).__init__(orchestrator)
         self._executor: Executor = MockProcessPoolExecutor()
+        self._nb_available_workers = 1
+        self._nb_available_workers_lock = Lock()
+
         self.dispatch_calls: List = []
-        self.release_worker_calls: List = []
-        self.set_dispatch_processes_calls: List = []
-        self.pop_dispatch_processes_calls: List = []
         self.update_job_status_from_future_calls: List = []
 
     def mock_exception_for_job(self, task_id, e: Exception):
@@ -50,18 +51,6 @@ class MockStandaloneDispatcher(_StandaloneJobDispatcher):
     def _dispatch(self, job: Job):
         self.dispatch_calls.append(job)
         super()._dispatch(job)
-
-    def _set_dispatched_processes(self, job_id, future):
-        self.set_dispatch_processes_calls.append((job_id, future))
-        super()._set_dispatched_processes(job_id, future)
-
-    def _pop_dispatched_process(self, job_id, default=None):
-        self.pop_dispatch_processes_calls.append(job_id)
-        return super()._pop_dispatched_process(job_id, default)
-
-    def _release_worker(self, _):
-        self.release_worker_calls.append(None)
-        super()._release_worker(_)
 
     def _update_job_status_from_future(self, job: Job, ft):
         self.update_job_status_from_future_calls.append((job, ft))

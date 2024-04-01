@@ -19,18 +19,17 @@ import pandas as pd
 
 from taipy.config.common.scope import Scope
 
-from .._backup._backup import _replace_in_backup_file
 from .._entity._reload import _self_reload
 from .._version._version_manager_factory import _VersionManagerFactory
 from ..exceptions.exceptions import UnknownCompressionAlgorithm, UnknownParquetEngine
 from ..job.job_id import JobId
-from ._abstract_file import _AbstractFileDataNode
-from ._abstract_tabular import _AbstractTabularDataNode
+from ._abstract_file import _FileDataNodeMixin
+from ._abstract_tabular import _TabularDataNodeMixin
 from .data_node import DataNode
 from .data_node_id import DataNodeId, Edit
 
 
-class ParquetDataNode(DataNode, _AbstractFileDataNode, _AbstractTabularDataNode):
+class ParquetDataNode(DataNode, _FileDataNodeMixin, _TabularDataNodeMixin):
     """Data Node stored as a Parquet file.
 
     Attributes:
@@ -135,14 +134,11 @@ class ParquetDataNode(DataNode, _AbstractFileDataNode, _AbstractTabularDataNode)
         if self.__WRITE_KWARGS_PROPERTY not in properties.keys():
             properties[self.__WRITE_KWARGS_PROPERTY] = {}
 
-        if self._EXPOSED_TYPE_PROPERTY not in properties.keys():
-            properties[self._EXPOSED_TYPE_PROPERTY] = self._EXPOSED_TYPE_PANDAS
-        elif properties[self._EXPOSED_TYPE_PROPERTY] == self._EXPOSED_TYPE_MODIN:
-            # Deprecated in favor of pandas since 3.1.0
-            properties[self._EXPOSED_TYPE_PROPERTY] = self._EXPOSED_TYPE_PANDAS
+        properties[self._EXPOSED_TYPE_PROPERTY] = _TabularDataNodeMixin._get_valid_exposed_type(properties)
         self._check_exposed_type(properties[self._EXPOSED_TYPE_PROPERTY])
 
-        super().__init__(
+        DataNode.__init__(
+            self,
             config_id,
             scope,
             id,
@@ -157,9 +153,15 @@ class ParquetDataNode(DataNode, _AbstractFileDataNode, _AbstractTabularDataNode)
             editor_expiration_date,
             **properties,
         )
+        _TabularDataNodeMixin.__init__(self, **properties)
+
         self._path = properties.get(self.__PATH_KEY, properties.get(self.__DEFAULT_PATH_KEY))
+
+        if self._path and ".data" in self._path:
+            self._path = self._migrate_path(self.storage_type(), self._path)
         if not self._path:
             self._path = self._build_path(self.storage_type())
+
         properties[self.__PATH_KEY] = self._path
 
         if default_value is not None and not os.path.exists(self._path):
@@ -202,10 +204,8 @@ class ParquetDataNode(DataNode, _AbstractFileDataNode, _AbstractTabularDataNode)
 
     @path.setter
     def path(self, value):
-        tmp_old_path = self._path
         self._path = value
         self.properties[self.__PATH_KEY] = value
-        _replace_in_backup_file(old_file_path=tmp_old_path, new_file_path=self._path)
 
     def _read(self):
         return self.read_with_kwargs()
@@ -244,10 +244,14 @@ class ParquetDataNode(DataNode, _AbstractFileDataNode, _AbstractTabularDataNode)
         }
         kwargs.update(self.properties[self.__WRITE_KWARGS_PROPERTY])
         kwargs.update(write_kwargs)
-        if isinstance(data, pd.DataFrame):
-            data.to_parquet(self._path, **kwargs)
+        if isinstance(data, pd.Series):
+            df = pd.DataFrame(data)
         else:
-            pd.DataFrame(data).to_parquet(self._path, **kwargs)
+            df = self._convert_data_to_dataframe(self.properties[self._EXPOSED_TYPE_PROPERTY], data)
+
+        # Ensure that the columns are strings, otherwise writing will fail with pandas 1.3.5
+        df.columns = df.columns.astype(str)
+        df.to_parquet(self._path, **kwargs)
         self.track_edit(timestamp=datetime.now(), job_id=job_id)
 
     def read_with_kwargs(self, **read_kwargs):

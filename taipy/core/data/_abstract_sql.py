@@ -25,12 +25,12 @@ from taipy.config.common.scope import Scope
 from .._version._version_manager_factory import _VersionManagerFactory
 from ..data.operator import JoinOperator, Operator
 from ..exceptions.exceptions import MissingRequiredProperty, UnknownDatabaseEngine
-from ._abstract_tabular import _AbstractTabularDataNode
+from ._abstract_tabular import _TabularDataNodeMixin
 from .data_node import DataNode
 from .data_node_id import DataNodeId, Edit
 
 
-class _AbstractSQLDataNode(DataNode, _AbstractTabularDataNode):
+class _AbstractSQLDataNode(DataNode, _TabularDataNodeMixin):
     """Abstract base class for data node implementations (SQLDataNode and SQLTableDataNode) that use SQL."""
 
     __STORAGE_TYPE = "NOT_IMPLEMENTED"
@@ -95,14 +95,11 @@ class _AbstractSQLDataNode(DataNode, _AbstractTabularDataNode):
             properties = {}
         self._check_required_properties(properties)
 
-        if self._EXPOSED_TYPE_PROPERTY not in properties.keys():
-            properties[self._EXPOSED_TYPE_PROPERTY] = self._EXPOSED_TYPE_PANDAS
-        elif properties[self._EXPOSED_TYPE_PROPERTY] == self._EXPOSED_TYPE_MODIN:
-            # Deprecated in favor of pandas since 3.1.0
-            properties[self._EXPOSED_TYPE_PROPERTY] = self._EXPOSED_TYPE_PANDAS
+        properties[self._EXPOSED_TYPE_PROPERTY] = _TabularDataNodeMixin._get_valid_exposed_type(properties)
         self._check_exposed_type(properties[self._EXPOSED_TYPE_PROPERTY])
 
-        super().__init__(
+        DataNode.__init__(
+            self,
             config_id,
             scope,
             id,
@@ -117,8 +114,9 @@ class _AbstractSQLDataNode(DataNode, _AbstractTabularDataNode):
             editor_expiration_date,
             **properties,
         )
+        _TabularDataNodeMixin.__init__(self, **properties)
         self._engine = None
-        if not self._last_edit_date:
+        if not self._last_edit_date:  # type: ignore
             self._last_edit_date = datetime.now()
 
         self._TAIPY_PROPERTIES.update(
@@ -147,7 +145,7 @@ class _AbstractSQLDataNode(DataNode, _AbstractTabularDataNode):
 
         if missing := set(required) - set(properties.keys()):
             raise MissingRequiredProperty(
-                f"The following properties " f"{', '.join(x for x in missing)} were not informed and are required."
+                f"The following properties {', '.join(missing)} were not informed and are required."
             )
 
     def _get_engine(self):
@@ -226,9 +224,14 @@ class _AbstractSQLDataNode(DataNode, _AbstractTabularDataNode):
         join_operator=JoinOperator.AND,
     ):
         with self._get_engine().connect() as conn:
+            result = conn.execute(text(self._get_read_query(operators, join_operator)))
+
+            # On pandas 1.3.5 there's a bug that makes that the dataframe from sqlalchemy query is
+            # created without headers
+            keys = list(result.keys())
             if columns:
-                return pd.DataFrame(conn.execute(text(self._get_read_query(operators, join_operator))))[columns]
-            return pd.DataFrame(conn.execute(text(self._get_read_query(operators, join_operator))))
+                return pd.DataFrame(result, columns=keys)[columns]
+            return pd.DataFrame(result, columns=keys)
 
     @abstractmethod
     def _get_read_query(self, operators: Optional[Union[List, Tuple]] = None, join_operator=JoinOperator.AND):

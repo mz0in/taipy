@@ -13,7 +13,7 @@ import re
 import typing as t
 from datetime import datetime
 
-from ..gui_types import PropertyType
+from ..types import PropertyType
 from .builder import _Builder
 
 if t.TYPE_CHECKING:
@@ -43,6 +43,7 @@ class _Factory:
         "indicator": "display",
         "input": "value",
         "layout": "columns",
+        "login": "title",
         "menu": "lov",
         "navbar": "value",
         "number": "value",
@@ -81,11 +82,7 @@ class _Factory:
             ]
         ),
         "chart": lambda gui, control_type, attrs: _Builder(
-            gui=gui,
-            control_type=control_type,
-            element_name="Chart",
-            attributes=attrs,
-            default_value=None
+            gui=gui, control_type=control_type, element_name="Chart", attributes=attrs, default_value=None
         )
         .set_value_and_default(with_default=False, var_type=PropertyType.data)
         .set_attributes(
@@ -104,7 +101,7 @@ class _Factory:
                 ("template", PropertyType.dict),
                 ("template[dark]", PropertyType.dict, gui._get_config("chart_dark_template", None)),
                 ("template[light]", PropertyType.dict),
-                ("figure", PropertyType.to_json)
+                ("figure", PropertyType.to_json),
             ]
         )
         ._get_chart_config("scatter", "lines+markers")
@@ -228,6 +225,7 @@ class _Factory:
                 ("extensions",),
                 ("drop_message",),
                 ("hover_text", PropertyType.dynamic_string),
+                ("notify", PropertyType.boolean, True),
             ]
         ),
         "image": lambda gui, control_type, attrs: _Builder(
@@ -300,6 +298,17 @@ class _Factory:
                 ("id",),
                 ("columns[mobile]",),
                 ("gap",),
+            ]
+        ),
+        "login": lambda gui, control_type, attrs: _Builder(
+            gui=gui, control_type=control_type, element_name="Login", attributes=attrs, default_value=None
+        )
+        .set_value_and_default(default_val="Log-in")
+        .set_attributes(
+            [
+                ("id",),
+                ("message", PropertyType.dynamic_string),
+                ("on_action", PropertyType.function, "on_login"),
             ]
         ),
         "menu": lambda gui, control_type, attrs: _Builder(
@@ -429,6 +438,7 @@ class _Factory:
                 ("value_by_id", PropertyType.boolean),
                 ("max", PropertyType.number, 100),
                 ("min", PropertyType.number, 0),
+                ("step", PropertyType.number, 1),
                 ("orientation"),
                 ("width", PropertyType.string, "300px"),
                 ("on_change", PropertyType.function),
@@ -481,6 +491,7 @@ class _Factory:
                 ("filter", PropertyType.boolean),
                 ("hover_text", PropertyType.dynamic_string),
                 ("size",),
+                ("downloadable", PropertyType.boolean),
             ]
         )
         ._set_propagate()
@@ -506,7 +517,7 @@ class _Factory:
         "toggle": lambda gui, control_type, attrs: _Builder(
             gui=gui, control_type=control_type, element_name="Toggle", attributes=attrs, default_value=None
         )
-        .set_value_and_default(with_default=False, var_type=PropertyType.lov_value)
+        .set_value_and_default(with_default=False, var_type=PropertyType.toggle_value)
         ._get_adapter("lov", multi_selection=False)  # need to be called before set_lov
         ._set_lov()
         .set_attributes(
@@ -519,6 +530,7 @@ class _Factory:
                 ("unselected_value", PropertyType.string, ""),
                 ("allow_unselect", PropertyType.boolean),
                 ("on_change", PropertyType.function),
+                ("mode",),
             ]
         )
         ._set_kind()
@@ -593,8 +605,7 @@ class _Factory:
             for lib in _Factory.__LIBRARIES.get(parts[0], []):
                 elts = lib.get_elements()
                 if isinstance(elts, dict):
-                    element = elts.get(element_name)
-                    if element:
+                    if element := elts.get(element_name):
                         return lib, element_name, element
         else:
             element_name = name
@@ -602,8 +613,7 @@ class _Factory:
                 for lib in libs:
                     elts = lib.get_elements()
                     if isinstance(elts, dict):
-                        element = elts.get(element_name)
-                        if element:
+                        if element := elts.get(element_name):
                             return lib, element_name, element
         return None, None, None
 
@@ -614,15 +624,16 @@ class _Factory:
         name = name[len(_Factory.__TAIPY_NAME_SPACE) :] if name.startswith(_Factory.__TAIPY_NAME_SPACE) else name
         builder = _Factory.__CONTROL_BUILDERS.get(name)
         built = None
-        if builder is None:
-            lib, element_name, element = _Factory.__get_library_element(name)
-            if lib:
-                from ..extension.library import Element
+        with gui._get_autorization():
+            if builder is None:
+                lib, element_name, element = _Factory.__get_library_element(name)
+                if lib:
+                    from ..extension.library import Element
 
-                if isinstance(element, Element):
-                    return element._call_builder(element_name, gui, all_properties, lib, is_html)
-        else:
-            built = builder(gui, name, all_properties)
-        if isinstance(built, _Builder):
-            return built._build_to_string() if is_html else built.el
+                    if isinstance(element, Element):
+                        return element._call_builder(element_name, gui, all_properties, lib, is_html)
+            else:
+                built = builder(gui, name, all_properties)
+            if isinstance(built, _Builder):
+                return built._build_to_string() if is_html else built.el
         return None
